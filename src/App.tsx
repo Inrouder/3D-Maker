@@ -178,7 +178,7 @@ export default function App() {
       box: [30, 12, 30], cylinder: [6, 100, 6], sphere: [20, 20, 20], cone: [20, 30, 20], custom: [20, 20, 20]
     };
     const obj: ModelObject = {
-      id: makeId(), name: names[type], type, position: [0, type === 'cylinder' ? 50 : 0, 0],
+      id: makeId(), name: names[type], type, position: [0, 0, 0],
       rotation: [0, 0, 0], scale: [1, 1, 1], color: type === 'cylinder' ? '#e7a64b' : '#43b6a8',
       dimensions: dimensions[type]
     };
