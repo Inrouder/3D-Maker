@@ -757,7 +757,7 @@ export default function App() {
             <label><span>Position (mm)</span><input type="number" step="1" value={cutPosition} onChange={e => setCutPosition(Number(e.target.value))} /></label>
           </div>
           <button className="wide-tool" disabled={busy || selectedIds.length !== 1} onClick={cutAtPlane}><span className="cut-symbol">✂</span><span><strong>Objekt teilen</strong><small>Ebene teilt in zwei eigenständige Teile</small></span></button>
-
+        </div>
         <div className="tool-section">
           <div className="section-label">ANSICHT</div>
           <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>Auf Boden setzen</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
