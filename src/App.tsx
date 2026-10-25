@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
@@ -73,6 +74,11 @@ export default function App() {
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
+  const transformControlsRef = useRef<TransformControls | null>(null);
+  const objectsRef = useRef<ModelObject[]>([]);
+  const selectedIdRef = useRef<string | undefined>(undefined);
+  const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('scale');
+  const [liveTransform, setLiveTransform] = useState<{ dimensions: number[]; delta: number[]; rotation: number[] } | null>(null);
   const meshGroupRef = useRef<THREE.Group | null>(null);
   const meshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const dragRef = useRef<{ id: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
@@ -82,6 +88,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [projectName, setProjectName] = useState('Unbenanntes Projekt');
   const selected = objects.find(o => o.id === selectedIds[0]);
+  objectsRef.current = objects;
+  selectedIdRef.current = selectedIds[0];
 
   useEffect(() => {
     const host = hostRef.current;
@@ -118,6 +126,34 @@ export default function App() {
     controls.dampingFactor = 0.08;
     controls.target.set(0, 0, 0);
     controlsRef.current = controls;
+    const transformControls = new TransformControls(camera, renderer.domElement);
+    transformControls.setMode('scale');
+    transformControls.setSpace('local');
+    scene.add(transformControls.getHelper());
+    transformControlsRef.current = transformControls;
+    transformControls.addEventListener('dragging-changed', event => {
+      controls.enabled = !event.value;
+      if (!event.value) {
+        const object = transformControls.object;
+        const id = object?.userData.modelId as string | undefined;
+        if (object && id) {
+          const position: [number, number, number] = [object.position.x, object.position.y, object.position.z];
+          const rotation: [number, number, number] = [THREE.MathUtils.radToDeg(object.rotation.x), THREE.MathUtils.radToDeg(object.rotation.y), THREE.MathUtils.radToDeg(object.rotation.z)];
+          const scale: [number, number, number] = [Math.max(0.01, object.scale.x), Math.max(0.01, object.scale.y), Math.max(0.01, object.scale.z)];
+          setObjects(prev => prev.map(obj => obj.id === id ? { ...obj, position, rotation, scale } : obj));
+          const model = objectsRef.current.find(obj => obj.id === id);
+          if (model) setLiveTransform({ dimensions: model.dimensions.map((v, i) => v * scale[i]), delta: model.dimensions.map((v, i) => v * (scale[i] - model.scale[i])), rotation });
+        }
+      }
+    });
+    transformControls.addEventListener('objectChange', () => {
+      const object = transformControls.object;
+      const id = object?.userData.modelId as string | undefined;
+      const model = objectsRef.current.find(obj => obj.id === id);
+      if (!object || !model) return;
+      const dimensions = model.dimensions.map((v, i) => v * object.scale.toArray()[i]);
+      setLiveTransform({ dimensions, delta: dimensions.map((v, i) => v - model.dimensions[i] * model.scale[i]), rotation: object.rotation.toArray().slice(0, 3).map(v => THREE.MathUtils.radToDeg(v as number)) });
+    });
 
     let frame = 0;
     const animate = () => {
@@ -195,6 +231,8 @@ export default function App() {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       controls.dispose();
+      transformControls.dispose();
+      transformControlsRef.current = null;
       renderer.dispose();
       host.removeChild(renderer.domElement);
       meshMapRef.current.clear();
@@ -224,7 +262,13 @@ export default function App() {
       group.add(mesh);
       meshMapRef.current.set(obj.id, mesh);
     }
-  }, [objects]);
+    const gizmo = transformControlsRef.current;
+    const activeMesh = selectedIds.length === 1 ? meshMapRef.current.get(selectedIds[0]) : undefined;
+    if (gizmo) {
+      if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); }
+      else gizmo.detach();
+    }
+  }, [objects, selectedIds, transformMode]);
 
   useEffect(() => {
     for (const [id, mesh] of meshMapRef.current) {
@@ -423,7 +467,7 @@ export default function App() {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
   };
-  const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
     handleDroppedFiles(event.dataTransfer.files);
   };
@@ -505,10 +549,11 @@ export default function App() {
       <section className="viewport-section">
         <div className="viewport-toolbar">
           <div className="view-title"><span className="live-dot" /> 3D-ARBEITSFLÄCHE <span className="view-separator">/</span> <span className="muted">PERSPEKTIVE</span></div>
-          <div className="viewport-help"><span>Klicken & ziehen: Objekt bewegen</span><span>Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
+          <div className="transform-tools"><button className={transformMode === 'translate' ? 'active' : ''} onClick={() => setTransformMode('translate')} title="Verschieben">↔ Bewegen</button><button className={transformMode === 'rotate' ? 'active' : ''} onClick={() => setTransformMode('rotate')} title="Drehen">⟳ Drehen</button><button className={transformMode === 'scale' ? 'active' : ''} onClick={() => setTransformMode('scale')} title="Skalieren">⤢ Skalieren</button></div><div className="viewport-help"><span>Griffe ziehen · Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
         </div>
         <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
+          {selected && <div className="transform-readout"><strong>{transformMode === 'scale' ? 'SKALIERUNG LIVE' : transformMode === 'rotate' ? 'DREHUNG LIVE' : 'POSITION LIVE'}</strong>{transformMode === 'scale' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.dimensions[i] ?? selected.dimensions[i] * selected.scale[i]).toFixed(2)} mm</b> <em>{(liveTransform?.delta[i] ?? 0) >= 0 ? '+' : ''}{(liveTransform?.delta[i] ?? 0).toFixed(2)} mm</em></span>)}</div> : transformMode === 'rotate' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.rotation[i] ?? selected.rotation[i]).toFixed(1)}°</b></span>)}</div> : <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{selected.position[i].toFixed(2)} mm</b></span>)}</div>}</div>}
           <div className="drop-hint">STL / OBJ / .3dmaker.json hier ablegen</div>
           <div className="axis-badge"><span className="axis-x">X</span><span className="axis-y">Y</span><span className="axis-z">Z</span></div>
           {objects.length === 0 && <div className="empty-viewport">Erstelle links deinen ersten Körper.</div>}
@@ -530,7 +575,9 @@ export default function App() {
           <label className="field-label">Farbe<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
           <VectorFields title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
           <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
-          <VectorFields title="ABMESSUNGEN MM" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
+          <VectorFields title="ABMESSUNGEN MM · GRUNDMAẞ" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
+          <VectorFields title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
+          <div className="actual-dimensions"><span>AKTUELLE GESAMTMAẞE</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
           <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>Duplizieren</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>Löschen</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>Kein Objekt ausgewählt</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
