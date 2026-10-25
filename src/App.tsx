@@ -233,7 +233,8 @@ export default function App() {
       if (!hits.length) return;
       const mesh = hits[0].object as THREE.Mesh;
       const id = mesh.userData.modelId as string;
-      setSelectedIds(previous => event.shiftKey ? (previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]) : [id]);
+      const groupId = mesh.userData.groupId as string | undefined;
+      setSelectedIds(previous => event.shiftKey ? (previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]) : groupId ? objectsRef.current.filter(item => item.groupId === groupId).map(item => item.id) : [id]);
       if (!event.shiftKey) {
         const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -mesh.position.y);
         const startPoint = new THREE.Vector3();
