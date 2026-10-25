@@ -29,6 +29,17 @@ function geometryFor(obj: ModelObject): THREE.BufferGeometry {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(obj.geometryData.positions, 3));
     if (obj.geometryData.indices) g.setIndex(obj.geometryData.indices);
+    g.computeBoundingBox();
+    const bounds = g.boundingBox;
+    if (bounds) {
+      const size = new THREE.Vector3();
+      bounds.getSize(size);
+      g.scale(
+        size.x > 1e-6 ? obj.dimensions[0] / size.x : 1,
+        size.y > 1e-6 ? obj.dimensions[1] / size.y : 1,
+        size.z > 1e-6 ? obj.dimensions[2] / size.z : 1
+      );
+    }
     g.computeVertexNormals();
     g.computeBoundingBox();
     g.computeBoundingSphere();
@@ -61,6 +72,7 @@ export default function App() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const meshGroupRef = useRef<THREE.Group | null>(null);
   const meshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const dragRef = useRef<{ id: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjects] = useState<ModelObject[]>([initialObject()]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [status, setStatus] = useState('Bereit · Maße in mm');
@@ -131,15 +143,54 @@ export default function App() {
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects([...meshMapRef.current.values()], false);
       if (!hits.length) return;
-      const id = hits[0].object.userData.modelId as string;
+      const mesh = hits[0].object as THREE.Mesh;
+      const id = mesh.userData.modelId as string;
       setSelectedIds(previous => event.shiftKey ? (previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]) : [id]);
+      if (!event.shiftKey) {
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -mesh.position.y);
+        const startPoint = new THREE.Vector3();
+        if (raycaster.ray.intersectPlane(plane, startPoint)) {
+          dragRef.current = { id, pointerId: event.pointerId, startPoint, startPosition: mesh.position.clone(), plane };
+          controls.enabled = false;
+          renderer.domElement.setPointerCapture(event.pointerId);
+        }
+      }
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const point = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(drag.plane, point)) return;
+      const mesh = meshMapRef.current.get(drag.id);
+      if (!mesh) return;
+      mesh.position.set(drag.startPosition.x + point.x - drag.startPoint.x, drag.startPosition.y, drag.startPosition.z + point.z - drag.startPoint.z);
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const mesh = meshMapRef.current.get(drag.id);
+      if (mesh) {
+        const position: [number, number, number] = [mesh.position.x, mesh.position.y, mesh.position.z];
+        setObjects(prev => prev.map(obj => obj.id === drag.id ? { ...obj, position } : obj));
+      }
+      dragRef.current = null;
+      controls.enabled = true;
+      if (renderer.domElement.hasPointerCapture(event.pointerId)) renderer.domElement.releasePointerCapture(event.pointerId);
     };
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
 
     return () => {
       cancelAnimationFrame(frame);
       window.removeEventListener('resize', resize);
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
       controls.dispose();
       renderer.dispose();
       host.removeChild(renderer.domElement);
@@ -170,7 +221,16 @@ export default function App() {
       group.add(mesh);
       meshMapRef.current.set(obj.id, mesh);
     }
-  }, [objects, selectedIds]);
+  }, [objects]);
+
+  useEffect(() => {
+    for (const [id, mesh] of meshMapRef.current) {
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      const isSelected = selectedIds.includes(id);
+      material.emissive.set(isSelected ? '#0b514b' : '#000000');
+      material.emissiveIntensity = isSelected ? 0.65 : 0;
+    }
+  }, [selectedIds]);
 
   const addShape = (type: ShapeType) => {
     const names: Record<ShapeType, string> = { box: 'Quader', cylinder: 'Zylinder', sphere: 'Kugel', cone: 'Kegel', custom: 'Importiertes Mesh' };
@@ -224,14 +284,24 @@ export default function App() {
       const evaluator = new Evaluator();
       const result = evaluator.evaluate(targetBrush, cutterBrush, SUBTRACTION);
       const geometry = result.geometry;
+      geometry.computeBoundingBox();
+      const bounds = geometry.boundingBox;
+      if (!bounds) throw new Error('Das Ergebnis hat keine gültigen Abmessungen.');
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      bounds.getSize(size);
+      bounds.getCenter(center);
+      geometry.translate(-center.x, -center.y, -center.z);
       geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
       const positions = Array.from(geometry.getAttribute('position').array as ArrayLike<number>);
       const index = geometry.getIndex();
       const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
       if (positions.length < 9) throw new Error('Das Ergebnis enthält keine gültige Oberfläche.');
       const replacement: ModelObject = {
-        ...targetData, type: 'custom', position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
-        geometryData: { positions, indices }
+        ...targetData, type: 'custom', position: [center.x, center.y, center.z], rotation: [0, 0, 0], scale: [1, 1, 1],
+        dimensions: [size.x, size.y, size.z], geometryData: { positions, indices }
       };
       setObjects(prev => prev.filter(o => o.id !== cutterId).map(o => o.id === targetId ? replacement : o));
       setSelectedIds([targetId]);
@@ -310,6 +380,18 @@ export default function App() {
     downloadFile('3dmaker-export.stl', text, 'model/stl');
     setStatus('STL exportiert.');
   };
+  const placeOnGround = () => {
+    if (!selected) { setStatus('Bitte zuerst ein Objekt auswählen.'); return; }
+    const mesh = meshMapRef.current.get(selected.id);
+    if (!mesh) return;
+    mesh.updateMatrixWorld(true);
+    const bounds = new THREE.Box3().setFromObject(mesh);
+    if (bounds.isEmpty()) { setStatus('Für dieses Objekt konnten keine Abmessungen ermittelt werden.'); return; }
+    const nextY = mesh.position.y - bounds.min.y;
+    updateSelected({ position: [selected.position[0], nextY, selected.position[2]] });
+    setStatus('„' + selected.name + '“ auf den Boden gesetzt (Unterkante Y = 0).');
+  };
+
   const focusView = () => {
     const camera = cameraRef.current; const controls = controlsRef.current;
     if (!camera || !controls) return;
@@ -358,6 +440,7 @@ export default function App() {
         </div>
         <div className="tool-section">
           <div className="section-label">ANSICHT</div>
+          <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>Auf Boden setzen</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
           <button className="wide-tool" onClick={focusView}><span className="tool-glyph">⌖</span><span><strong>Alles einpassen</strong><small>Modelle im Blick zentrieren</small></span></button>
           <button className="wide-tool" onClick={() => { controlsRef.current?.reset(); }}><span className="tool-glyph">⟳</span><span><strong>Ansicht zurücksetzen</strong><small>Kamera zurücksetzen</small></span></button>
         </div>
@@ -367,7 +450,7 @@ export default function App() {
       <section className="viewport-section">
         <div className="viewport-toolbar">
           <div className="view-title"><span className="live-dot" /> 3D-ARBEITSFLÄCHE <span className="view-separator">/</span> <span className="muted">PERSPEKTIVE</span></div>
-          <div className="viewport-help"><span>Linke Maustaste: Auswählen</span><span>Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
+          <div className="viewport-help"><span>Klicken & ziehen: Objekt bewegen</span><span>Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
         </div>
         <div className="viewport" ref={hostRef}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
