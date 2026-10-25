@@ -23,6 +23,7 @@ type ModelObject = {
   groupId?: string;
 };
 
+const APP_VERSION = '0.1.1';
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const initialObject = (): ModelObject => ({
   id: makeId(), name: 'Quader', type: 'box', position: [0, 0, 0],
@@ -88,7 +89,7 @@ export default function App() {
   const meshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const visualGroupMapRef = useRef<Map<string, THREE.Group>>(new Map());
   const cutPreviewRef = useRef<THREE.LineSegments | null>(null);
-  const dragRef = useRef<{ id: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
+  const dragRef = useRef<{ id: string; groupId?: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
   const cloneObjects = (items: ModelObject[]) => JSON.parse(JSON.stringify(items)) as ModelObject[];
   const setObjects = (update: ModelObject[] | ((previous: ModelObject[]) => ModelObject[])) => {
@@ -124,6 +125,7 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
   const [cutPosition, setCutPosition] = useState(0);
+  const [cutMode, setCutMode] = useState(false);
   const [status, setStatus] = useState('Bereit · Maße in mm');
   const [busy, setBusy] = useState(false);
   const [projectName, setProjectName] = useState('Unbenanntes Projekt');
@@ -238,10 +240,14 @@ export default function App() {
       const groupId = mesh.userData.groupId as string | undefined;
       setSelectedIds(previous => event.shiftKey ? (previous.includes(id) ? previous.filter(x => x !== id) : [...previous, id]) : groupId ? objectsRef.current.filter(item => item.groupId === groupId).map(item => item.id) : [id]);
       if (!event.shiftKey) {
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -mesh.position.y);
+        // Drag the group pivot rather than an individual mesh when the clicked object belongs to a group.
+        const dragObject = groupId ? visualGroupMapRef.current.get(groupId) : mesh;
+        if (!dragObject) return;
+        const worldPosition = dragObject.getWorldPosition(new THREE.Vector3());
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -worldPosition.y);
         const startPoint = new THREE.Vector3();
         if (raycaster.ray.intersectPlane(plane, startPoint)) {
-          dragRef.current = { id, pointerId: event.pointerId, startPoint, startPosition: mesh.position.clone(), plane };
+          dragRef.current = { id, pointerId: event.pointerId, startPoint, startPosition: dragObject.position.clone(), plane, ...(groupId ? { groupId } : {}) };
           controls.enabled = false;
           renderer.domElement.setPointerCapture(event.pointerId);
         }
@@ -256,17 +262,34 @@ export default function App() {
       raycaster.setFromCamera(pointer, camera);
       const point = new THREE.Vector3();
       if (!raycaster.ray.intersectPlane(drag.plane, point)) return;
-      const mesh = meshMapRef.current.get(drag.id);
-      if (!mesh) return;
-      mesh.position.set(drag.startPosition.x + point.x - drag.startPoint.x, drag.startPosition.y, drag.startPosition.z + point.z - drag.startPoint.z);
+      const dragObject = drag.groupId ? visualGroupMapRef.current.get(drag.groupId) : meshMapRef.current.get(drag.id);
+      if (!dragObject) return;
+      dragObject.position.set(drag.startPosition.x + point.x - drag.startPoint.x, drag.startPosition.y, drag.startPosition.z + point.z - drag.startPoint.z);
     };
     const onPointerUp = (event: PointerEvent) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      const mesh = meshMapRef.current.get(drag.id);
-      if (mesh) {
-        const position: [number, number, number] = [mesh.position.x, mesh.position.y, mesh.position.z];
-        setObjects(prev => prev.map(obj => obj.id === drag.id ? { ...obj, position } : obj));
+      if (drag.groupId) {
+        const groupPivot = visualGroupMapRef.current.get(drag.groupId);
+        if (groupPivot) {
+          groupPivot.updateMatrixWorld(true);
+          setObjects(prev => prev.map(obj => {
+            if (obj.groupId !== drag.groupId) return obj;
+            const member = meshMapRef.current.get(obj.id); if (!member) return obj;
+            member.updateMatrixWorld(true);
+            const p = new THREE.Vector3(), q = new THREE.Quaternion(), scale = new THREE.Vector3();
+            member.matrixWorld.decompose(p, q, scale);
+            const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
+            return { ...obj, position: [p.x,p.y,p.z], rotation: [THREE.MathUtils.radToDeg(e.x),THREE.MathUtils.radToDeg(e.y),THREE.MathUtils.radToDeg(e.z)], scale: [Math.max(.01,scale.x),Math.max(.01,scale.y),Math.max(.01,scale.z)] };
+          }));
+          setStatus('Gruppe gemeinsam verschoben.');
+        }
+      } else {
+        const mesh = meshMapRef.current.get(drag.id);
+        if (mesh) {
+          const position: [number, number, number] = [mesh.position.x, mesh.position.y, mesh.position.z];
+          setObjects(prev => prev.map(obj => obj.id === drag.id ? { ...obj, position } : obj));
+        }
       }
       dragRef.current = null;
       controls.enabled = true;
@@ -336,7 +359,7 @@ export default function App() {
   useEffect(() => {
     const scene=sceneRef.current; if(!scene)return;
     if(cutPreviewRef.current){scene.remove(cutPreviewRef.current);cutPreviewRef.current.geometry.dispose();(cutPreviewRef.current.material as THREE.Material).dispose();cutPreviewRef.current=null;}
-    if(selectedIds.length!==1)return;
+    if(!cutMode || selectedIds.length!==1)return;
     const mesh=meshMapRef.current.get(selectedIds[0]); if(!mesh)return; mesh.updateMatrixWorld(true);
     const bounds=new THREE.Box3().setFromObject(mesh); if(bounds.isEmpty())return;
     const p=Number(cutPosition), a=bounds.min, b=bounds.max; let corners:THREE.Vector3[];
@@ -347,7 +370,7 @@ export default function App() {
     const line=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xffb347,depthTest:false,transparent:true,opacity:.95}));
     line.renderOrder=999;line.frustumCulled=false;scene.add(line);cutPreviewRef.current=line;
     return ()=>{if(cutPreviewRef.current===line){scene.remove(line);line.geometry.dispose();(line.material as THREE.Material).dispose();cutPreviewRef.current=null;}};
-  }, [cutAxis,cutPosition,selectedIds,objects]);
+  }, [cutMode,cutAxis,cutPosition,selectedIds,objects]);
 
   useEffect(() => { setLiveTransform(null); }, [selectedIds[0]]);
 
@@ -613,6 +636,10 @@ export default function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r') { event.preventDefault(); redo(); return; }
       if (event.key.toLowerCase() === 'h') { event.preventDefault(); subtract(); }
+      if (event.key.toLowerCase() === 'c' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        setCutMode(previous => { const next = !previous; setStatus(next ? 'Schnittmodus aktiv · Ebene einstellen und Objekt teilen.' : 'Schnittmodus beendet.'); return next; });
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); saveProject(); }
       if (event.key === 'Delete' || event.key === 'Backspace') {
         setObjects(prev => prev.filter(o => !selectedIds.includes(o.id)));
@@ -800,6 +827,7 @@ export default function App() {
           <button className="wide-tool" disabled={busy} onClick={subtract}><span className="cut-symbol">−</span><span><strong>Ausschnitt / Cut</strong><small>Ziel minus Schneidkörper</small></span><kbd>H</kbd></button>
           <p className="hint">Erst das Werkstück wählen, dann mit Umschalt-Klick den Körper für das Loch.</p>
           <div className="section-label">EBENE SCHNEIDEN</div>
+          <button className={`wide-tool ${cutMode ? 'active' : ''}`} aria-pressed={cutMode} onClick={() => setCutMode(previous => { const next = !previous; setStatus(next ? 'Schnittmodus aktiv · Orange Linie zeigt die Schnittebene.' : 'Schnittmodus beendet.'); return next; })}><span className="cut-symbol">✂</span><span><strong>{cutMode ? 'Schnittmodus beenden' : 'Schnittmodus aktivieren'}</strong><small>Orange Schnittebene ein-/ausblenden</small></span><kbd>C</kbd></button>
           <div className="vector-row">
             <label><span>Achse</span><select value={cutAxis} onChange={e => setCutAxis(e.target.value as 'x' | 'y' | 'z')}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
             <label><span>Position (mm)</span><input type="number" step="1" value={cutPosition} onChange={e => setCutPosition(Number(e.target.value))} /></label>
@@ -854,7 +882,7 @@ export default function App() {
           <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>Duplizieren</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>Löschen</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>Kein Objekt ausgewählt</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
-        <div className="right-footer"><span>3DMAKER</span><span>v0.1.0 · EXPERIMENTELL</span></div>
+        <div className="right-footer"><span>3DMAKER</span><span>v{APP_VERSION} · EXPERIMENTELL</span></div>
       </aside>
     </div>
   </main>;
