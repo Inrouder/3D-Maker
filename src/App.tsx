@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 
 type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom';
@@ -350,27 +352,79 @@ export default function App() {
     };
     reader.readAsText(file);
   };
-  const importStl = (file?: File) => {
+  const importMesh = (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const geometry = new STLLoader().parse(reader.result as ArrayBuffer);
-        geometry.computeBoundingBox();
-        const box = geometry.boundingBox!;
-        const positions = Array.from(geometry.getAttribute('position').array as ArrayLike<number>);
-        const index = geometry.getIndex();
-        const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
-        const obj: ModelObject = {
-          id: makeId(), name: file.name.replace(/\.stl$/i, ''), type: 'custom',
-          position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8',
-          dimensions: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z],
-          geometryData: { positions, indices }
-        };
-        setObjects(prev => [...prev, obj]); setSelectedIds([obj.id]); setStatus('STL-Modell importiert.');
-      } catch { setStatus('STL-Datei konnte nicht gelesen werden.'); }
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    const finishImport = (sourceGeometry: THREE.BufferGeometry) => {
+      sourceGeometry.computeBoundingBox();
+      const bounds = sourceGeometry.boundingBox;
+      if (!bounds) throw new Error('Keine gültigen Mesh-Abmessungen gefunden.');
+      const size = new THREE.Vector3();
+      const center = new THREE.Vector3();
+      bounds.getSize(size);
+      bounds.getCenter(center);
+      sourceGeometry.translate(-center.x, -center.y, -center.z);
+      sourceGeometry.computeVertexNormals();
+      sourceGeometry.computeBoundingBox();
+      sourceGeometry.computeBoundingSphere();
+      const positions = Array.from(sourceGeometry.getAttribute('position').array as ArrayLike<number>);
+      const index = sourceGeometry.getIndex();
+      const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
+      const obj: ModelObject = {
+        id: makeId(), name: file.name.replace(/\.(stl|obj)$/i, ''), type: 'custom',
+        position: [center.x, center.y, center.z], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8',
+        dimensions: [size.x, size.y, size.z], geometryData: { positions, indices }
+      };
+      setObjects(prev => [...prev, obj]); setSelectedIds([obj.id]); setStatus(extension?.toUpperCase() + '-Modell importiert.');
     };
-    reader.readAsArrayBuffer(file);
+    if (extension === 'stl') {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try { finishImport(new STLLoader().parse(reader.result as ArrayBuffer)); }
+        catch (error) { setStatus('STL-Import fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Dateifehler')); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else if (extension === 'obj') {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const root = new OBJLoader().parse(String(reader.result));
+          root.updateMatrixWorld(true);
+          const parts: THREE.BufferGeometry[] = [];
+          root.traverse(child => {
+            if (!(child instanceof THREE.Mesh)) return;
+            const geometry = child.geometry.clone();
+            geometry.applyMatrix4(child.matrixWorld);
+            if (!geometry.getAttribute('position')) return;
+            parts.push(geometry);
+          });
+          if (!parts.length) throw new Error('Die OBJ-Datei enthält keine Mesh-Geometrie.');
+          const merged = mergeGeometries(parts, false);
+          parts.forEach(g => g.dispose());
+          if (!merged) throw new Error('Die OBJ-Teile konnten nicht zusammengefügt werden.');
+          finishImport(merged);
+        } catch (error) { setStatus('OBJ-Import fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Dateifehler')); }
+      };
+      reader.readAsText(file);
+    } else {
+      setStatus('Bitte eine STL-, OBJ- oder .3dmaker.json-Datei verwenden.');
+    }
+  };
+  const handleDroppedFiles = (files: FileList | File[]) => {
+    const file = Array.from(files)[0];
+    if (!file) return;
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (extension === 'stl' || extension === 'obj') importMesh(file);
+    else if (extension === 'json' || file.name.toLowerCase().endsWith('.3dmaker.json')) openProject(file);
+    else setStatus('Dateiformat nicht unterstützt. Erlaubt: STL, OBJ und 3DMaker-Projekte.');
+  };
+  const onDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+  };
+  const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    handleDroppedFiles(event.dataTransfer.files);
   };
   const exportStl = () => {
     const group = meshGroupRef.current;
@@ -416,7 +470,7 @@ export default function App() {
       <div className="top-actions">
         <button onClick={saveProject} title="Projekt speichern (Strg+S)">Speichern</button>
         <label className="button secondary">Öffnen<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
-        <label className="button secondary">STL importieren<input hidden type="file" accept=".stl" onChange={e => importStl(e.target.files?.[0])} /></label>
+        <label className="button secondary">Mesh importieren<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
         <button className="primary" onClick={exportStl}>STL exportieren</button>
       </div>
     </header>
@@ -452,8 +506,9 @@ export default function App() {
           <div className="view-title"><span className="live-dot" /> 3D-ARBEITSFLÄCHE <span className="view-separator">/</span> <span className="muted">PERSPEKTIVE</span></div>
           <div className="viewport-help"><span>Klicken & ziehen: Objekt bewegen</span><span>Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
         </div>
-        <div className="viewport" ref={hostRef}>
+        <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
+          <div className="drop-hint">STL / OBJ / .3dmaker.json hier ablegen</div>
           <div className="axis-badge"><span className="axis-x">X</span><span className="axis-y">Y</span><span className="axis-z">Z</span></div>
           {objects.length === 0 && <div className="empty-viewport">Erstelle links deinen ersten Körper.</div>}
         </div>
