@@ -86,6 +86,8 @@ export default function App() {
   const [liveTransform, setLiveTransform] = useState<{ dimensions: number[]; delta: number[]; rotation: number[] } | null>(null);
   const meshGroupRef = useRef<THREE.Group | null>(null);
   const meshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const visualGroupMapRef = useRef<Map<string, THREE.Group>>(new Map());
+  const cutPreviewRef = useRef<THREE.LineSegments | null>(null);
   const dragRef = useRef<{ id: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
   const cloneObjects = (items: ModelObject[]) => JSON.parse(JSON.stringify(items)) as ModelObject[];
@@ -172,7 +174,18 @@ export default function App() {
       if (!event.value) {
         const object = transformControls.object;
         const id = object?.userData.modelId as string | undefined;
-        if (object && id) {
+        const groupId = object?.userData.groupId as string | undefined;
+        if (object && groupId) {
+          setObjects(prev => prev.map(item => {
+            if (item.groupId !== groupId) return item;
+            const member = meshMapRef.current.get(item.id); if (!member) return item;
+            member.updateMatrixWorld(true);
+            const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3(); member.matrixWorld.decompose(p,q,sc);
+            const e = new THREE.Euler().setFromQuaternion(q, 'XYZ');
+            return { ...item, position:[p.x,p.y,p.z], rotation:[THREE.MathUtils.radToDeg(e.x),THREE.MathUtils.radToDeg(e.y),THREE.MathUtils.radToDeg(e.z)], scale:[Math.max(.01,sc.x),Math.max(.01,sc.y),Math.max(.01,sc.z)] };
+          }));
+          setStatus('Gruppenänderung übernommen.');
+        } else if (object && id) {
           const position: [number, number, number] = [object.position.x, object.position.y, object.position.z];
           const rotation: [number, number, number] = [THREE.MathUtils.radToDeg(object.rotation.x), THREE.MathUtils.radToDeg(object.rotation.y), THREE.MathUtils.radToDeg(object.rotation.z)];
           const scale: [number, number, number] = [Math.max(0.01, object.scale.x), Math.max(0.01, object.scale.y), Math.max(0.01, object.scale.z)];
@@ -272,6 +285,8 @@ export default function App() {
       renderer.dispose();
       host.removeChild(renderer.domElement);
       meshMapRef.current.clear();
+      visualGroupMapRef.current.clear();
+      if (cutPreviewRef.current) { scene.remove(cutPreviewRef.current); cutPreviewRef.current.geometry.dispose(); (cutPreviewRef.current.material as THREE.Material).dispose(); cutPreviewRef.current = null; }
     };
   }, []);
 
@@ -280,6 +295,15 @@ export default function App() {
     if (!group) return;
     group.clear();
     meshMapRef.current.clear();
+    visualGroupMapRef.current.clear();
+    const membersByGroup = new Map<string, ModelObject[]>();
+    for (const obj of objects) if (obj.groupId) membersByGroup.set(obj.groupId,[...(membersByGroup.get(obj.groupId) ?? []),obj]);
+    const pivots = new Map<string, THREE.Group>();
+    for (const [groupId,members] of membersByGroup) if (members.length > 1) {
+      const pivot = new THREE.Group();
+      const center = members.reduce((sum,obj)=>sum.add(new THREE.Vector3(...obj.position)),new THREE.Vector3()).multiplyScalar(1/members.length);
+      pivot.position.copy(center); pivot.userData.groupId=groupId; group.add(pivot); pivots.set(groupId,pivot); visualGroupMapRef.current.set(groupId,pivot);
+    }
     for (const obj of objects) {
       const geometry = geometryFor(obj);
       const material = new THREE.MeshStandardMaterial({
@@ -289,22 +313,38 @@ export default function App() {
         emissiveIntensity: selectedIds.includes(obj.id) ? 0.65 : 0
       });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(...obj.position);
+      const pivot = obj.groupId ? pivots.get(obj.groupId) : undefined;
+      if (pivot) mesh.position.set(obj.position[0]-pivot.position.x,obj.position[1]-pivot.position.y,obj.position[2]-pivot.position.z); else mesh.position.set(...obj.position);
       mesh.rotation.set(...obj.rotation.map(v => THREE.MathUtils.degToRad(v)) as [number, number, number]);
-      mesh.scale.set(...obj.scale);
-      mesh.userData.modelId = obj.id;
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      group.add(mesh);
-      meshMapRef.current.set(obj.id, mesh);
+      mesh.scale.set(...obj.scale); mesh.userData.modelId = obj.id;
+      if (pivot) mesh.userData.groupId=obj.groupId;
+      mesh.castShadow = true; mesh.receiveShadow = true; (pivot ?? group).add(mesh); meshMapRef.current.set(obj.id, mesh);
     }
     const gizmo = transformControlsRef.current;
-    const activeMesh = selectedIds.length === 1 ? meshMapRef.current.get(selectedIds[0]) : undefined;
+    const selectedObjects = objects.filter(obj=>selectedIds.includes(obj.id));
+    const groupedSelection = selectedObjects.length > 1 && selectedObjects.every(obj=>obj.groupId && obj.groupId===selectedObjects[0].groupId);
+    const activeMesh = selectedObjects.length===1 ? (selectedObjects[0].groupId ? visualGroupMapRef.current.get(selectedObjects[0].groupId!) : meshMapRef.current.get(selectedObjects[0].id)) : undefined;
     if (gizmo) {
-      if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); }
-      else gizmo.detach();
+      if (groupedSelection) { const pivot=visualGroupMapRef.current.get(selectedObjects[0].groupId!); if(pivot){gizmo.attach(pivot);gizmo.setMode(transformMode);}else gizmo.detach(); }
+      else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
     }
   }, [objects, selectedIds, transformMode]);
+
+  useEffect(() => {
+    const scene=sceneRef.current; if(!scene)return;
+    if(cutPreviewRef.current){scene.remove(cutPreviewRef.current);cutPreviewRef.current.geometry.dispose();(cutPreviewRef.current.material as THREE.Material).dispose();cutPreviewRef.current=null;}
+    if(selectedIds.length!==1)return;
+    const mesh=meshMapRef.current.get(selectedIds[0]); if(!mesh)return; mesh.updateMatrixWorld(true);
+    const bounds=new THREE.Box3().setFromObject(mesh); if(bounds.isEmpty())return;
+    const p=Number(cutPosition), a=bounds.min, b=bounds.max; let corners:THREE.Vector3[];
+    if(cutAxis==='x') corners=[new THREE.Vector3(p,a.y,a.z),new THREE.Vector3(p,b.y,a.z),new THREE.Vector3(p,b.y,b.z),new THREE.Vector3(p,a.y,b.z)];
+    else if(cutAxis==='y') corners=[new THREE.Vector3(a.x,p,a.z),new THREE.Vector3(b.x,p,a.z),new THREE.Vector3(b.x,p,b.z),new THREE.Vector3(a.x,p,b.z)];
+    else corners=[new THREE.Vector3(a.x,a.y,p),new THREE.Vector3(b.x,a.y,p),new THREE.Vector3(b.x,b.y,p),new THREE.Vector3(a.x,b.y,p)];
+    const points:THREE.Vector3[]=[]; for(let i=0;i<4;i++)points.push(corners[i],corners[(i+1)%4]);
+    const line=new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:0xffb347,depthTest:false,transparent:true,opacity:.95}));
+    line.renderOrder=999;line.frustumCulled=false;scene.add(line);cutPreviewRef.current=line;
+    return ()=>{if(cutPreviewRef.current===line){scene.remove(line);line.geometry.dispose();(line.material as THREE.Material).dispose();cutPreviewRef.current=null;}};
+  }, [cutAxis,cutPosition,selectedIds,objects]);
 
   useEffect(() => { setLiveTransform(null); }, [selectedIds[0]]);
 
@@ -739,7 +779,7 @@ export default function App() {
             if (selectedIds.length < 2) return;
             const groupId = makeId();
             setObjects(prev => prev.map(o => selectedIds.includes(o.id) ? { ...o, groupId } : o));
-            setStatus(`${selectedIds.length} Objekte gruppiert.`);
+            setStatus(`${selectedIds.length} Objekte gruppiert und gemeinsam transformierbar.`);
           }}><span className="tool-glyph">▦</span><span><strong>Gruppieren</strong><small>Ausgewählte Objekte zusammenfassen</small></span></button>
           <button className="wide-tool" disabled={!selectedIds.some(id => objects.some(o => o.id === id && o.groupId))} onClick={() => {
             const ids = new Set(selectedIds.map(id => objects.find(o => o.id === id)?.groupId).filter((id): id is string => Boolean(id)));
