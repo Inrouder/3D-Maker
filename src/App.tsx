@@ -175,7 +175,7 @@ export default function App() {
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || transformControls.axis !== null) return;
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -269,6 +269,8 @@ export default function App() {
       else gizmo.detach();
     }
   }, [objects, selectedIds, transformMode]);
+
+  useEffect(() => { setLiveTransform(null); }, [selectedIds[0]]);
 
   useEffect(() => {
     for (const [id, mesh] of meshMapRef.current) {
