@@ -329,6 +329,29 @@ export default function App() {
       // can contain non-indexed vertices or stale material groups, so normalize every input.
       const prepareCsgGeometry = (mesh: THREE.Mesh) => {
         let geometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+        const position = geometry.getAttribute('position');
+        if (!position || position.count < 3 || position.itemSize !== 3) {
+          geometry.dispose();
+          throw new Error('Ein Körper besitzt keine gültigen Positionsdaten.');
+        }
+        // three-bvh-csg expects UV attributes even for plain, untextured solids.
+        // Generated/custom/STL geometry may not include them, so add neutral UVs.
+        const uv = geometry.getAttribute('uv');
+        if (!uv || uv.count !== position.count || uv.itemSize !== 2) {
+          geometry.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(position.count * 2), 2));
+        }
+        // The CSG evaluator only needs positions, normals and UVs. Strip malformed or
+        // mismatched auxiliary attributes so imported meshes and previous cut results
+        // can be reused reliably in later Boolean operations.
+        const normal = geometry.getAttribute('normal');
+        if (!normal || normal.count !== position.count || normal.itemSize !== 3) {
+          geometry.deleteAttribute('normal');
+          geometry.computeVertexNormals();
+        }
+        for (const name of Object.keys(geometry.attributes)) {
+          const attribute = geometry.getAttribute(name);
+          if (attribute.count !== position.count) geometry.deleteAttribute(name);
+        }
         if (!geometry.getIndex()) {
           const indexed = mergeVertices(geometry, 1e-5);
           geometry.dispose();
