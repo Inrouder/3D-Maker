@@ -7,7 +7,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
+import { Brush, Evaluator, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
 
 type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom';
 type ModelObject = {
@@ -20,6 +20,7 @@ type ModelObject = {
   color: string;
   dimensions: [number, number, number];
   geometryData?: { positions: number[]; indices: number[] | null };
+  groupId?: string;
 };
 
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -76,13 +77,48 @@ export default function App() {
   const controlsRef = useRef<OrbitControls | null>(null);
   const transformControlsRef = useRef<TransformControls | null>(null);
   const objectsRef = useRef<ModelObject[]>([]);
+  const undoStackRef = useRef<ModelObject[][]>([]);
+  const redoStackRef = useRef<ModelObject[][]>([]);
+  const historyReadyRef = useRef(false);
+  const [historyVersion, setHistoryVersion] = useState(0);
   const selectedIdRef = useRef<string | undefined>(undefined);
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('scale');
   const [liveTransform, setLiveTransform] = useState<{ dimensions: number[]; delta: number[]; rotation: number[] } | null>(null);
   const meshGroupRef = useRef<THREE.Group | null>(null);
   const meshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const dragRef = useRef<{ id: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
-  const [objects, setObjects] = useState<ModelObject[]>([initialObject()]);
+  const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
+  const cloneObjects = (items: ModelObject[]) => JSON.parse(JSON.stringify(items)) as ModelObject[];
+  const setObjects = (update: ModelObject[] | ((previous: ModelObject[]) => ModelObject[])) => {
+    const next = typeof update === 'function' ? update(objectsRef.current) : update;
+    if (historyReadyRef.current) {
+      undoStackRef.current.push(cloneObjects(objectsRef.current));
+      if (undoStackRef.current.length > 100) undoStackRef.current.shift();
+      redoStackRef.current = [];
+    }
+    objectsRef.current = next;
+    setObjectsState(next);
+    setHistoryVersion(v => v + 1);
+  };
+  const undo = () => {
+    const previous = undoStackRef.current.pop();
+    if (!previous) { setStatus('Nichts zum Rückgängigmachen vorhanden.'); return; }
+    redoStackRef.current.push(cloneObjects(objectsRef.current));
+    objectsRef.current = cloneObjects(previous);
+    setObjectsState(objectsRef.current);
+    setSelectedIds([]);
+    setStatus('Letzte Aktion rückgängig gemacht.');
+  };
+  const redo = () => {
+    const next = redoStackRef.current.pop();
+    if (!next) { setStatus('Nichts zum Wiederholen vorhanden.'); return; }
+    undoStackRef.current.push(cloneObjects(objectsRef.current));
+    objectsRef.current = cloneObjects(next);
+    setObjectsState(objectsRef.current);
+    setSelectedIds([]);
+    setStatus('Aktion wiederhergestellt.');
+  };
+  useEffect(() => { historyReadyRef.current = true; }, []);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [status, setStatus] = useState('Bereit · Maße in mm');
   const [busy, setBusy] = useState(false);
@@ -428,6 +464,8 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(); return; }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r') { event.preventDefault(); redo(); return; }
       if (event.key.toLowerCase() === 'h') { event.preventDefault(); subtract(); }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); saveProject(); }
       if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -438,7 +476,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [subtract, selectedIds]);
+  }, [subtract, selectedIds, historyVersion]);
 
   const saveProject = () => {
     const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
@@ -576,6 +614,8 @@ export default function App() {
       <div className="top-divider" />
       <label className="project-label">PROJEKT <input value={projectName} onChange={e => setProjectName(e.target.value)} aria-label="Projektname" /></label>
       <div className="top-actions">
+        <button onClick={undo} disabled={undoStackRef.current.length === 0} title="Rückgängig (Strg+Z)">↶ Rückgängig</button>
+        <button onClick={redo} disabled={redoStackRef.current.length === 0} title="Wiederholen (Strg+R)">↷ Wiederholen</button>
         <button onClick={saveProject} title="Projekt speichern (Strg+S)">Speichern</button>
         <label className="button secondary">Öffnen<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
         <label className="button secondary">Mesh importieren<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
@@ -594,6 +634,20 @@ export default function App() {
             <button className="shape-button" onClick={() => addShape('sphere')}><span className="shape-icon">●</span><span>Kugel</span></button>
             <button className="shape-button" onClick={() => addShape('cone')}><span className="shape-icon">▲</span><span>Kegel</span></button>
           </div>
+        </div>
+        <div className="tool-section">
+          <div className="section-label">GRUPPIERUNG</div>
+          <button className="wide-tool" disabled={selectedIds.length < 2} onClick={() => {
+            if (selectedIds.length < 2) return;
+            const groupId = makeId();
+            setObjects(prev => prev.map(o => selectedIds.includes(o.id) ? { ...o, groupId } : o));
+            setStatus(`${selectedIds.length} Objekte gruppiert.`);
+          }}><span className="tool-glyph">▦</span><span><strong>Gruppieren</strong><small>Ausgewählte Objekte zusammenfassen</small></span></button>
+          <button className="wide-tool" disabled={!selectedIds.some(id => objects.some(o => o.id === id && o.groupId))} onClick={() => {
+            const ids = new Set(selectedIds.map(id => objects.find(o => o.id === id)?.groupId).filter((id): id is string => Boolean(id)));
+            setObjects(prev => prev.map(o => o.groupId && ids.has(o.groupId) ? { ...o, groupId: undefined } : o));
+            setStatus("Gruppierung aufgehoben.");
+          }}><span className="tool-glyph">▤</span><span><strong>Gruppierung lösen</strong><small>Gruppe wieder in Einzelobjekte aufteilen</small></span></button>
         </div>
         <div className="tool-section">
           <div className="section-label">GEOMETRIE</div>
@@ -627,8 +681,12 @@ export default function App() {
       <aside className="right-panel">
         <div className="panel-heading"><span>OBJEKT-EXPLORER</span><span className="object-count">{objects.length}</span></div>
         <div className="object-list">
-          {objects.map((obj, index) => <button key={obj.id} className={`object-row ${selectedIds.includes(obj.id) ? 'selected' : ''}`} onClick={e => setSelectedIds(prev => e.shiftKey ? (prev.includes(obj.id) ? prev.filter(id => id !== obj.id) : [...prev, obj.id]) : [obj.id])}>
-            <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.name}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
+          {objects.map((obj, index) => <button key={obj.id} className={`object-row ${selectedIds.includes(obj.id) ? 'selected' : ''}`} onClick={e => {
+            if (e.shiftKey) setSelectedIds(prev => prev.includes(obj.id) ? prev.filter(id => id !== obj.id) : [...prev, obj.id]);
+            else if (obj.groupId) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
+            else setSelectedIds([obj.id]);
+          }}>
+            <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId ? '▦ ' : ''}{obj.name}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
           </button>)}
           {objects.length === 0 && <div className="empty-list">Noch keine Objekte vorhanden.</div>}
         </div>
