@@ -321,6 +321,7 @@ export default function App() {
       return;
     }
     setBusy(true);
+    setStatus('Ausschnitt wird vorbereitet …');
     try {
       target.updateMatrixWorld(true);
       cutter.updateMatrixWorld(true);
@@ -351,7 +352,12 @@ export default function App() {
       cutterBrush.updateMatrixWorld(true);
       const evaluator = new Evaluator();
       evaluator.useGroups = false;
+      setStatus('Boolean-Schnitt wird berechnet …');
       const result = evaluator.evaluate(targetBrush, cutterBrush, SUBTRACTION);
+      if (!result.geometry.getAttribute('position') || result.geometry.getAttribute('position').count < 3) {
+        result.geometry.dispose();
+        throw new Error('Die Schnittberechnung lieferte keine gültige Geometrie. Prüfe, ob sich beide Körper überschneiden.');
+      }
       targetGeometry.dispose();
       cutterGeometry.dispose();
       targetMaterial.dispose();
@@ -383,7 +389,7 @@ export default function App() {
       };
       setObjects(prev => prev.filter(o => o.id !== cutterId).map(o => o.id === targetId ? replacement : o));
       setSelectedIds([targetId]);
-      setStatus('Ausschnitt erstellt. Der Schneidkörper wurde entfernt.');
+      setStatus('Ausschnitt erfolgreich erstellt. Der Schneidkörper wurde entfernt.');
     } catch (error) {
       console.error(error);
       setStatus(`Ausschnitt fehlgeschlagen: ${error instanceof Error ? error.message : 'Geometriefehler'}`);
