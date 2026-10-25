@@ -6,7 +6,7 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Brush, Evaluator, SUBTRACTION } from 'three-bvh-csg';
 
 type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom';
@@ -324,14 +324,38 @@ export default function App() {
     try {
       target.updateMatrixWorld(true);
       cutter.updateMatrixWorld(true);
-      const targetGeometry = target.geometry.clone().applyMatrix4(target.matrixWorld);
-      const cutterGeometry = cutter.geometry.clone().applyMatrix4(cutter.matrixWorld);
-      const targetBrush = new Brush(targetGeometry, new THREE.MeshStandardMaterial({ color: targetData.color, side: THREE.DoubleSide }));
-      const cutterBrush = new Brush(cutterGeometry, new THREE.MeshStandardMaterial({ side: THREE.DoubleSide }));
+      // CSG needs clean, indexed triangle geometry. STL and some previous CSG results
+      // can contain non-indexed vertices or stale material groups, so normalize every input.
+      const prepareCsgGeometry = (mesh: THREE.Mesh) => {
+        let geometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+        if (!geometry.getIndex()) {
+          const indexed = mergeVertices(geometry, 1e-5);
+          geometry.dispose();
+          geometry = indexed;
+        }
+        geometry.clearGroups();
+        geometry.computeVertexNormals();
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
+        const indexCount = geometry.getIndex()?.count ?? geometry.getAttribute('position').count;
+        geometry.addGroup(0, indexCount, 0);
+        return geometry;
+      };
+      const targetGeometry = prepareCsgGeometry(target);
+      const cutterGeometry = prepareCsgGeometry(cutter);
+      const targetMaterial = new THREE.MeshStandardMaterial({ color: targetData.color, side: THREE.DoubleSide });
+      const cutterMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide });
+      const targetBrush = new Brush(targetGeometry, targetMaterial);
+      const cutterBrush = new Brush(cutterGeometry, cutterMaterial);
       targetBrush.updateMatrixWorld(true);
       cutterBrush.updateMatrixWorld(true);
       const evaluator = new Evaluator();
+      evaluator.useGroups = false;
       const result = evaluator.evaluate(targetBrush, cutterBrush, SUBTRACTION);
+      targetGeometry.dispose();
+      cutterGeometry.dispose();
+      targetMaterial.dispose();
+      cutterMaterial.dispose();
       const geometry = result.geometry;
       geometry.computeBoundingBox();
       const bounds = geometry.boundingBox;
@@ -341,11 +365,16 @@ export default function App() {
       bounds.getSize(size);
       bounds.getCenter(center);
       geometry.translate(-center.x, -center.y, -center.z);
-      geometry.computeVertexNormals();
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
-      const positions = Array.from(geometry.getAttribute('position').array as ArrayLike<number>);
-      const index = geometry.getIndex();
+      geometry.clearGroups();
+      // Weld coincident vertices so the result remains a clean mesh for future CSG operations.
+      const weldedGeometry = mergeVertices(geometry, 1e-5);
+      geometry.dispose();
+      const cleanGeometry = weldedGeometry;
+      cleanGeometry.computeVertexNormals();
+      cleanGeometry.computeBoundingBox();
+      cleanGeometry.computeBoundingSphere();
+      const positions = Array.from(cleanGeometry.getAttribute('position').array as ArrayLike<number>);
+      const index = cleanGeometry.getIndex();
       const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
       if (positions.length < 9) throw new Error('Das Ergebnis enthält keine gültige Oberfläche.');
       const replacement: ModelObject = {
