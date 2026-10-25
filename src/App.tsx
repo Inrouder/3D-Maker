@@ -460,6 +460,104 @@ export default function App() {
     }
   }, [objects, selectedIds]);
 
+  const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
+  const [cutPosition, setCutPosition] = useState(0);
+  const cutAtPlane = useCallback(() => {
+    if (selectedIds.length !== 1) {
+      setStatus('Bitte genau ein Objekt auswählen, das an einer Ebene geteilt werden soll.');
+      return;
+    }
+    const targetId = selectedIds[0];
+    const mesh = meshMapRef.current.get(targetId);
+    const original = objectsRef.current.find(o => o.id === targetId);
+    if (!mesh || !original) return;
+    setBusy(true);
+    try {
+      mesh.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(mesh);
+      if (bounds.isEmpty()) throw new Error('Für dieses Objekt konnten keine Abmessungen ermittelt werden.');
+      const size = bounds.getSize(new THREE.Vector3());
+      const center = bounds.getCenter(new THREE.Vector3());
+      const axis = cutAxis === 'x' ? 0 : cutAxis === 'y' ? 1 : 2;
+      const extent = Math.max(size.x, size.y, size.z, 10) * 3 + 10;
+      const plane = Number(cutPosition);
+      if (!Number.isFinite(plane)) throw new Error('Bitte eine gültige Schnittposition in mm eingeben.');
+      const inputGeometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
+      const pos = inputGeometry.getAttribute('position');
+      if (!pos || pos.count < 3) throw new Error('Das Objekt enthält keine gültigen Positionsdaten.');
+      if (!inputGeometry.getAttribute('uv') || inputGeometry.getAttribute('uv').count !== pos.count) {
+        inputGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(pos.count * 2), 2));
+      }
+      inputGeometry.deleteAttribute('normal');
+      inputGeometry.computeVertexNormals();
+      for (const name of Object.keys(inputGeometry.attributes)) {
+        if (inputGeometry.getAttribute(name).count !== pos.count) inputGeometry.deleteAttribute(name);
+      }
+      let indexedGeometry = inputGeometry;
+      if (!indexedGeometry.getIndex()) {
+        indexedGeometry = mergeVertices(inputGeometry, 1e-5);
+        inputGeometry.dispose();
+      }
+      indexedGeometry.clearGroups();
+      indexedGeometry.computeVertexNormals();
+      indexedGeometry.addGroup(0, indexedGeometry.getIndex()?.count ?? indexedGeometry.getAttribute('position').count, 0);
+      const targetBrush = new Brush(indexedGeometry, new THREE.MeshStandardMaterial({ color: original.color, side: THREE.DoubleSide }));
+      targetBrush.updateMatrixWorld(true);
+
+      const cutterSize: [number, number, number] = [size.x + extent * 2, size.y + extent * 2, size.z + extent * 2];
+      cutterSize[axis] = extent * 2;
+      const cutterGeometry = new THREE.BoxGeometry(...cutterSize);
+      const cutterMesh = new THREE.Mesh(cutterGeometry);
+      cutterMesh.position.copy(center);
+      if (axis === 0) cutterMesh.position.x = plane + extent;
+      if (axis === 1) cutterMesh.position.y = plane + extent;
+      if (axis === 2) cutterMesh.position.z = plane + extent;
+      cutterMesh.updateMatrixWorld(true);
+      const worldCutterGeometry = cutterGeometry.clone().applyMatrix4(cutterMesh.matrixWorld);
+      worldCutterGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(worldCutterGeometry.getAttribute('position').count * 2), 2));
+      worldCutterGeometry.computeVertexNormals();
+      worldCutterGeometry.clearGroups();
+      worldCutterGeometry.addGroup(0, worldCutterGeometry.getIndex()?.count ?? worldCutterGeometry.getAttribute('position').count, 0);
+      const cutterBrush = new Brush(worldCutterGeometry, new THREE.MeshStandardMaterial({ side: THREE.DoubleSide }));
+      cutterBrush.updateMatrixWorld(true);
+      const evaluator = new Evaluator();
+      evaluator.useGroups = false;
+      setStatus('Schnittfläche wird berechnet …');
+      const positive = evaluator.evaluate(targetBrush, cutterBrush, INTERSECTION).geometry;
+      const negative = evaluator.evaluate(targetBrush, cutterBrush, SUBTRACTION).geometry;
+      const makeHalf = (geometry: THREE.BufferGeometry, suffix: string): ModelObject | null => {
+        const p = geometry.getAttribute('position');
+        if (!p || p.count < 3) { geometry.dispose(); return null; }
+        geometry.computeBoundingBox();
+        if (!geometry.boundingBox) { geometry.dispose(); return null; }
+        const halfSize = geometry.boundingBox.getSize(new THREE.Vector3());
+        const halfCenter = geometry.boundingBox.getCenter(new THREE.Vector3());
+        geometry.translate(-halfCenter.x, -halfCenter.y, -halfCenter.z);
+        geometry.computeVertexNormals();
+        const index = geometry.getIndex();
+        const data = { positions: Array.from(geometry.getAttribute('position').array as ArrayLike<number>), indices: index?.array ? Array.from(index.array as ArrayLike<number>) : null };
+        geometry.dispose();
+        if (data.positions.length < 9) return null;
+        return { ...original, id: makeId(), name: original.name + suffix, type: 'custom', position: halfCenter.toArray() as [number, number, number], rotation: [0, 0, 0], scale: [1, 1, 1], dimensions: [halfSize.x, halfSize.y, halfSize.z], geometryData: data, groupId: original.groupId };
+      };
+      const halves = [makeHalf(negative, ' – Teil A'), makeHalf(positive, ' – Teil B')].filter((o): o is ModelObject => o !== null);
+      indexedGeometry.dispose();
+      cutterBrush.geometry.dispose();
+      (targetBrush.material as THREE.Material).dispose();
+      (cutterBrush.material as THREE.Material).dispose();
+      cutterGeometry.dispose();
+      if (halves.length !== 2) throw new Error('Die Ebene hat den Körper nicht in zwei gültige Teile getrennt. Verschiebe die Schnittposition in den Körper hinein.');
+      setObjects(prev => [...prev.filter(o => o.id !== targetId), ...halves]);
+      setSelectedIds(halves.map(o => o.id));
+      setStatus('Objekt an der gewählten Ebene in zwei Teile getrennt.');
+    } catch (error) {
+      console.error(error);
+      setStatus('Schnitt fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Geometriefehler'));
+    } finally {
+      setBusy(false);
+    }
+  }, [selectedIds, cutAxis, cutPosition]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -653,7 +751,13 @@ export default function App() {
           <div className="section-label">GEOMETRIE</div>
           <button className="wide-tool" disabled={busy} onClick={subtract}><span className="cut-symbol">−</span><span><strong>Ausschnitt / Cut</strong><small>Ziel minus Schneidkörper</small></span><kbd>H</kbd></button>
           <p className="hint">Erst das Werkstück wählen, dann mit Umschalt-Klick den Körper für das Loch.</p>
-        </div>
+          <div className="section-label">EBENE SCHNEIDEN</div>
+          <div className="vector-row">
+            <label><span>Achse</span><select value={cutAxis} onChange={e => setCutAxis(e.target.value as 'x' | 'y' | 'z')}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
+            <label><span>Position (mm)</span><input type="number" step="1" value={cutPosition} onChange={e => setCutPosition(Number(e.target.value))} /></label>
+          </div>
+          <button className="wide-tool" disabled={busy || selectedIds.length !== 1} onClick={cutAtPlane}><span className="cut-symbol">✂</span><span><strong>Objekt teilen</strong><small>Ebene teilt in zwei eigenständige Teile</small></span></button>
+
         <div className="tool-section">
           <div className="section-label">ANSICHT</div>
           <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>Auf Boden setzen</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
