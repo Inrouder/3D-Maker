@@ -122,6 +122,8 @@ export default function App() {
   };
   useEffect(() => { historyReadyRef.current = true; }, []);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
+  const [cutPosition, setCutPosition] = useState(0);
   const [status, setStatus] = useState('Bereit · Maße in mm');
   const [busy, setBusy] = useState(false);
   const [projectName, setProjectName] = useState('Unbenanntes Projekt');
@@ -501,8 +503,6 @@ export default function App() {
     }
   }, [objects, selectedIds]);
 
-  const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
-  const [cutPosition, setCutPosition] = useState(0);
   useEffect(() => {
     if (selectedIds.length !== 1) return;
     const selectedObject = objects.find(obj => obj.id === selectedIds[0]);
