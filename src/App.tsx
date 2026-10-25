@@ -372,16 +372,19 @@ export default function App() {
       bounds.getCenter(center);
       geometry.translate(-center.x, -center.y, -center.z);
       geometry.clearGroups();
-      // Weld coincident vertices so the result remains a clean mesh for future CSG operations.
-      const weldedGeometry = mergeVertices(geometry, 1e-5);
-      geometry.dispose();
-      const cleanGeometry = weldedGeometry;
-      cleanGeometry.computeVertexNormals();
-      cleanGeometry.computeBoundingBox();
-      cleanGeometry.computeBoundingSphere();
-      const positions = Array.from(cleanGeometry.getAttribute('position').array as ArrayLike<number>);
-      const index = cleanGeometry.getIndex();
-      const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
+      // Keep the evaluator's result attributes intact. mergeVertices() can fail on
+      // CSG output with incomplete auxiliary attributes, even when position geometry is valid.
+      const positionAttribute = geometry.getAttribute('position');
+      if (!positionAttribute || positionAttribute.count < 3) {
+        geometry.dispose();
+        throw new Error('Die Schnittberechnung lieferte keine gültigen Positionsdaten.');
+      }
+      geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      const positions = Array.from(positionAttribute.array as ArrayLike<number>);
+      const index = geometry.getIndex();
+      const indices = index?.array ? Array.from(index.array as ArrayLike<number>) : null;
       if (positions.length < 9) throw new Error('Das Ergebnis enthält keine gültige Oberfläche.');
       const replacement: ModelObject = {
         ...targetData, type: 'custom', position: [center.x, center.y, center.z], rotation: [0, 0, 0], scale: [1, 1, 1],
