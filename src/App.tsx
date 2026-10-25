@@ -503,6 +503,13 @@ export default function App() {
 
   const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
   const [cutPosition, setCutPosition] = useState(0);
+  useEffect(() => {
+    if (selectedIds.length !== 1) return;
+    const selectedObject = objects.find(obj => obj.id === selectedIds[0]);
+    if (!selectedObject) return;
+    const axis = cutAxis === 'x' ? 0 : cutAxis === 'y' ? 1 : 2;
+    setCutPosition(selectedObject.position[axis]);
+  }, [selectedIds[0], cutAxis]);
   const cutAtPlane = useCallback(() => {
     if (selectedIds.length !== 1) {
       setStatus('Bitte genau ein Objekt auswählen, das an einer Ebene geteilt werden soll.');
