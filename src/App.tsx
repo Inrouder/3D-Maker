@@ -23,7 +23,14 @@ type ModelObject = {
   groupId?: string;
 };
 
-const APP_VERSION = '0.1.4';
+const APP_VERSION = '0.1.5';
+type AppLanguage = 'de' | 'en';
+type AppTheme = 'dark' | 'light';
+const uiText: Record<AppLanguage, Record<string, string>> = {
+  de: {settings:'Einstellungen',appearance:'Darstellung',theme:'Design',dark:'Dunkel',light:'Hell',language:'Sprache',info:'Programm-Info',version:'Version',contact:'Ansprechpartner',credit:'Shad3pi in cooperation with OpenAI ChatGPT',repository:'GitHub-Repository',close:'Schließen',tools:'WERKZEUGE',project:'PROJEKT',undo:'↶ Rückgängig',redo:'↷ Wiederholen',save:'Speichern',open:'Öffnen',importMesh:'Mesh importieren',export:'STL exportieren',basics:'GRUNDKÖRPER',grouping:'GRUPPIERUNG',geometry:'GEOMETRIE',view:'ANSICHT',explorer:'OBJEKT-EXPLORER',properties:'EIGENSCHAFTEN',box:'Quader',cylinder:'Zylinder',sphere:'Kugel',cone:'Kegel',group:'Gruppieren',ungroup:'Gruppierung lösen',cut:'Ausschnitt / Cut',cutPlane:'EBENE SCHNEIDEN',cutOn:'Schnittmodus beenden',cutOff:'Schnittmodus aktivieren',split:'Objekt teilen',ground:'Auf Boden setzen',frame:'Alles einpassen',reset:'Ansicht zurücksetzen',move:'↔ Bewegen',rotate:'⟳ Drehen',scale:'⤢ Skalieren',noObject:'Kein Objekt ausgewählt',name:'Objektname',color:'Farbe',position:'POSITION',rotation:'DREHUNG °',dimensions:'ABMESSUNGEN MM · GRUNDMAẞ',scaling:'SKALIERUNG ×',duplicate:'Duplizieren',delete:'Löschen',private:'Privat & lokal',noLogin:'Kein Login · Keine Werbung',workspace:'3D-ARBEITSFLÄCHE',perspective:'PERSPEKTIVE',status:'Bereit · Maße in mm'},
+  en: {settings:'Settings',appearance:'Appearance',theme:'Theme',dark:'Dark',light:'Light',language:'Language',info:'About',version:'Version',contact:'Contact',credit:'Shad3pi in cooperation with OpenAI ChatGPT',repository:'GitHub repository',close:'Close',tools:'TOOLS',project:'PROJECT',undo:'↶ Undo',redo:'↷ Redo',save:'Save',open:'Open',importMesh:'Import mesh',export:'Export STL',basics:'PRIMITIVES',grouping:'GROUPING',geometry:'GEOMETRY',view:'VIEW',explorer:'OBJECT EXPLORER',properties:'PROPERTIES',box:'Box',cylinder:'Cylinder',sphere:'Sphere',cone:'Cone',group:'Group',ungroup:'Ungroup',cut:'Boolean cut',cutPlane:'PLANE CUT',cutOn:'Exit cut mode',cutOff:'Enable cut mode',split:'Split object',ground:'Place on ground',frame:'Frame all',reset:'Reset view',move:'↔ Move',rotate:'⟳ Rotate',scale:'⤢ Scale',noObject:'No object selected',name:'Object name',color:'Color',position:'POSITION',rotation:'ROTATION °',dimensions:'DIMENSIONS MM · BASE SIZE',scaling:'SCALE ×',duplicate:'Duplicate',delete:'Delete',private:'Private & local',noLogin:'No login · No ads',workspace:'3D WORKSPACE',perspective:'PERSPECTIVE',status:'Ready · Dimensions in mm'}
+};
+
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const initialObject = (): ModelObject => ({
   id: makeId(), name: 'Quader', type: 'box', position: [0, 0, 0],
@@ -82,6 +89,10 @@ export default function App() {
   const redoStackRef = useRef<ModelObject[][]>([]);
   const historyReadyRef = useRef(false);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => (localStorage.getItem('3dmaker-theme') as AppTheme) || 'dark');
+  const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => (localStorage.getItem('3dmaker-language') as AppLanguage) || 'de');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const t = (key: string) => uiText[appLanguage][key] ?? key;
   const selectedIdRef = useRef<string | undefined>(undefined);
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('scale');
   const [liveTransform, setLiveTransform] = useState<{ dimensions: number[]; delta: number[]; rotation: number[] } | null>(null);
@@ -123,6 +134,8 @@ export default function App() {
     setStatus('Aktion wiederhergestellt.');
   };
   useEffect(() => { historyReadyRef.current = true; }, []);
+  useEffect(() => { localStorage.setItem('3dmaker-theme', appTheme); document.documentElement.dataset.theme = appTheme; }, [appTheme]);
+  useEffect(() => { localStorage.setItem('3dmaker-language', appLanguage); document.documentElement.lang = appLanguage; }, [appLanguage]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
   const [cutPosition, setCutPosition] = useState(0);
@@ -889,72 +902,75 @@ export default function App() {
     controls.update();
   };
 
-  return <main className="app-shell">
+  return <main className={`app-shell theme-${appTheme}`}>
+    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
+
     <header className="topbar">
       <div className="brand-mark">3D</div><div className="brand-copy"><strong>3DMaker</strong><span>OFFLINE 3D MODELLIERER</span></div>
       <div className="top-divider" />
-      <label className="project-label">PROJEKT <input value={projectName} onChange={e => setProjectName(e.target.value)} aria-label="Projektname" /></label>
+      <label className="project-label">{t("project")} <input value={projectName} onChange={e => setProjectName(e.target.value)} aria-label="Projektname" /></label>
       <div className="top-actions">
-        <button onClick={undo} disabled={undoStackRef.current.length === 0} title="Rückgängig (Strg+Z)">↶ Rückgängig</button>
-        <button onClick={redo} disabled={redoStackRef.current.length === 0} title="Wiederholen (Strg+R)">↷ Wiederholen</button>
-        <button onClick={saveProject} title="Projekt speichern (Strg+S)">Speichern</button>
-        <label className="button secondary">Öffnen<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
-        <label className="button secondary">Mesh importieren<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
-        <button className="primary" onClick={exportStl}>STL exportieren</button>
+        <button className="settings-trigger" onClick={() => setSettingsOpen(true)} title={t("settings")}>⚙ <span>{t("settings")}</span></button>
+        <button onClick={undo} disabled={undoStackRef.current.length === 0} title="Rückgängig (Strg+Z)">{t("undo")}</button>
+        <button onClick={redo} disabled={redoStackRef.current.length === 0} title="Wiederholen (Strg+R)">{t("redo")}</button>
+        <button onClick={saveProject} title="Projekt speichern (Strg+S)">{t("save")}</button>
+        <label className="button secondary">{t("open")}<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
+        <label className="button secondary">{t("importMesh")}<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
+        <button className="primary" onClick={exportStl}>{t("export")}</button>
       </div>
     </header>
 
     <div className="workspace">
       <aside className="left-panel">
-        <div className="panel-heading"><span>WERKZEUGE</span><span className="tiny-dot" /></div>
+        <div className="panel-heading"><span>{t("tools")}</span><span className="tiny-dot" /></div>
         <div className="tool-section">
-          <div className="section-label">GRUNDKÖRPER</div>
+          <div className="section-label">{t("basics")}</div>
           <div className="shape-grid">
-            <button className="shape-button" onClick={() => addShape('box')}><span className="shape-icon cube-icon">▰</span><span>Quader</span></button>
-            <button className="shape-button" onClick={() => addShape('cylinder')}><span className="shape-icon">⬭</span><span>Zylinder</span></button>
-            <button className="shape-button" onClick={() => addShape('sphere')}><span className="shape-icon">●</span><span>Kugel</span></button>
-            <button className="shape-button" onClick={() => addShape('cone')}><span className="shape-icon">▲</span><span>Kegel</span></button>
+            <button className="shape-button" onClick={() => addShape('box')}><span className="shape-icon cube-icon">▰</span><span>{t("box")}</span></button>
+            <button className="shape-button" onClick={() => addShape('cylinder')}><span className="shape-icon">⬭</span><span>{t("cylinder")}</span></button>
+            <button className="shape-button" onClick={() => addShape('sphere')}><span className="shape-icon">●</span><span>{t("sphere")}</span></button>
+            <button className="shape-button" onClick={() => addShape('cone')}><span className="shape-icon">▲</span><span>{t("cone")}</span></button>
           </div>
         </div>
         <div className="tool-section">
-          <div className="section-label">GRUPPIERUNG</div>
+          <div className="section-label">{t("grouping")}</div>
           <button className="wide-tool" disabled={selectedIds.length < 2} onClick={() => {
             if (selectedIds.length < 2) return;
             const groupId = makeId();
             setObjects(prev => prev.map(o => selectedIds.includes(o.id) ? { ...o, groupId } : o));
             setStatus(`${selectedIds.length} Objekte gruppiert und gemeinsam transformierbar.`);
-          }}><span className="tool-glyph">▦</span><span><strong>Gruppieren</strong><small>Ausgewählte Objekte zusammenfassen</small></span></button>
+          }}><span className="tool-glyph">▦</span><span><strong>{t("group")}</strong><small>Ausgewählte Objekte zusammenfassen</small></span></button>
           <button className="wide-tool" disabled={!selectedIds.some(id => objects.some(o => o.id === id && o.groupId))} onClick={() => {
             const ids = new Set(selectedIds.map(id => objects.find(o => o.id === id)?.groupId).filter((id): id is string => Boolean(id)));
             setObjects(prev => prev.map(o => o.groupId && ids.has(o.groupId) ? { ...o, groupId: undefined } : o));
             setStatus("Gruppierung aufgehoben.");
-          }}><span className="tool-glyph">▤</span><span><strong>Gruppierung lösen</strong><small>Gruppe wieder in Einzelobjekte aufteilen</small></span></button>
+          }}><span className="tool-glyph">▤</span><span><strong>{t("ungroup")}</strong><small>Gruppe wieder in Einzelobjekte aufteilen</small></span></button>
         </div>
         <div className="tool-section">
-          <div className="section-label">GEOMETRIE</div>
-          <button className="wide-tool" disabled={busy} onClick={subtract}><span className="cut-symbol">−</span><span><strong>Ausschnitt / Cut</strong><small>Ziel minus Schneidkörper</small></span><kbd>H</kbd></button>
+          <div className="section-label">{t("geometry")}</div>
+          <button className="wide-tool" disabled={busy} onClick={subtract}><span className="cut-symbol">−</span><span><strong>{t("cut")}</strong><small>Ziel minus Schneidkörper</small></span><kbd>H</kbd></button>
           <p className="hint">Erst das Werkstück wählen, dann mit Umschalt-Klick den Körper für das Loch.</p>
-          <div className="section-label">EBENE SCHNEIDEN</div>
-          <button className={`wide-tool ${cutMode ? 'active' : ''}`} aria-pressed={cutMode} onClick={() => setCutMode(previous => { const next = !previous; setStatus(next ? 'Schnittmodus aktiv · Orange Linie zeigt die Schnittebene.' : 'Schnittmodus beendet.'); return next; })}><span className="cut-symbol">✂</span><span><strong>{cutMode ? 'Schnittmodus beenden' : 'Schnittmodus aktivieren'}</strong><small>Orange Schnittebene ein-/ausblenden</small></span><kbd>C</kbd></button>
+          <div className="section-label">{t("cutPlane")}</div>
+          <button className={`wide-tool ${cutMode ? 'active' : ''}`} aria-pressed={cutMode} onClick={() => setCutMode(previous => { const next = !previous; setStatus(next ? 'Schnittmodus aktiv · Orange Linie zeigt die Schnittebene.' : 'Schnittmodus beendet.'); return next; })}><span className="cut-symbol">✂</span><span><strong>{cutMode ? t("cutOn") : t("cutOff")}</strong><small>Orange Schnittebene ein-/ausblenden</small></span><kbd>C</kbd></button>
           <div className="vector-row">
             <label><span>Achse</span><select value={cutAxis} onChange={e => setCutAxis(e.target.value as 'x' | 'y' | 'z')}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
             <label><span>Position (mm)</span><input type="number" step="1" value={cutPosition} onChange={e => setCutPosition(Number(e.target.value))} /></label>
           </div>
-          <button className="wide-tool" disabled={busy || selectedIds.length !== 1} onClick={cutAtPlane}><span className="cut-symbol">✂</span><span><strong>Objekt teilen</strong><small>Ebene teilt in zwei eigenständige Teile</small></span></button>
+          <button className="wide-tool" disabled={busy || selectedIds.length !== 1} onClick={cutAtPlane}><span className="cut-symbol">✂</span><span><strong>{t("split")}</strong><small>Ebene teilt in zwei eigenständige Teile</small></span></button>
         </div>
         <div className="tool-section">
-          <div className="section-label">ANSICHT</div>
-          <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>Auf Boden setzen</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
-          <button className="wide-tool" onClick={focusView}><span className="tool-glyph">⌖</span><span><strong>Alles einpassen</strong><small>Modelle im Blick zentrieren</small></span></button>
-          <button className="wide-tool" onClick={() => { controlsRef.current?.reset(); }}><span className="tool-glyph">⟳</span><span><strong>Ansicht zurücksetzen</strong><small>Kamera zurücksetzen</small></span></button>
+          <div className="section-label">{t("view")}</div>
+          <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>{t("ground")}</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
+          <button className="wide-tool" onClick={focusView}><span className="tool-glyph">⌖</span><span><strong>{t("frame")}</strong><small>Modelle im Blick zentrieren</small></span></button>
+          <button className="wide-tool" onClick={() => { controlsRef.current?.reset(); }}><span className="tool-glyph">⟳</span><span><strong>{t("reset")}</strong><small>Kamera zurücksetzen</small></span></button>
         </div>
-        <div className="left-footer"><span className="privacy-icon">◈</span><span><strong>Privat & lokal</strong><small>Kein Login · Keine Werbung</small></span></div>
+        <div className="left-footer"><span className="privacy-icon">◈</span><span><strong>{t("private")}</strong><small>{t("noLogin")}</small></span></div>
       </aside>
 
       <section className="viewport-section">
         <div className="viewport-toolbar">
-          <div className="view-title"><span className="live-dot" /> 3D-ARBEITSFLÄCHE <span className="view-separator">/</span> <span className="muted">PERSPEKTIVE</span></div>
-          <div className="transform-tools"><button className={transformMode === 'translate' ? 'active' : ''} onClick={() => setTransformMode('translate')} title="Verschieben">↔ Bewegen</button><button className={transformMode === 'rotate' ? 'active' : ''} onClick={() => setTransformMode('rotate')} title="Drehen">⟳ Drehen</button><button className={transformMode === 'scale' ? 'active' : ''} onClick={() => setTransformMode('scale')} title="Skalieren">⤢ Skalieren</button></div><div className="viewport-help"><span>Griffe ziehen · Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
+          <div className="view-title"><span className="live-dot" /> {t("workspace")} <span className="view-separator">/</span> <span className="muted">{t("perspective")}</span></div>
+          <div className="transform-tools"><button className={transformMode === 'translate' ? 'active' : ''} onClick={() => setTransformMode('translate')} title="Verschieben">{t("move")}</button><button className={transformMode === 'rotate' ? 'active' : ''} onClick={() => setTransformMode('rotate')} title="Drehen">{t("rotate")}</button><button className={transformMode === 'scale' ? 'active' : ''} onClick={() => setTransformMode('scale')} title="Skalieren">{t("scale")}</button></div><div className="viewport-help"><span>Griffe ziehen · Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
         </div>
         <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
@@ -967,7 +983,7 @@ export default function App() {
       </section>
 
       <aside className="right-panel">
-        <div className="panel-heading"><span>OBJEKT-EXPLORER</span><span className="object-count">{objects.length}</span></div>
+        <div className="panel-heading"><span>{t("explorer")}</span><span className="object-count">{objects.length}</span></div>
         <div className="object-list">
           {objects.map((obj, index) => <button key={obj.id} className={`object-row ${selectedIds.includes(obj.id) ? 'selected' : ''}`} onClick={e => {
             if (e.shiftKey) setSelectedIds(prev => prev.includes(obj.id) ? prev.filter(id => id !== obj.id) : [...prev, obj.id]);
@@ -978,17 +994,17 @@ export default function App() {
           </button>)}
           {objects.length === 0 && <div className="empty-list">Noch keine Objekte vorhanden.</div>}
         </div>
-        <div className="properties-heading"><span>EIGENSCHAFTEN</span>{selected && <span className="property-type">{selected.type.toUpperCase()}</span>}</div>
+        <div className="properties-heading"><span>{t("properties")}</span>{selected && <span className="property-type">{selected.type.toUpperCase()}</span>}</div>
         {selected ? <div className="properties">
-          <label className="field-label">Objektname<input value={selected.name} onChange={e => updateSelected({ name: e.target.value })} /></label>
-          <label className="field-label">Farbe<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
+          <label className="field-label">{t("name")}<input value={selected.name} onChange={e => updateSelected({ name: e.target.value })} /></label>
+          <label className="field-label">{t("color")}<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
           <VectorFields title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
           <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
           <VectorFields title="ABMESSUNGEN MM · GRUNDMAẞ" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
           <VectorFields title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
           <div className="actual-dimensions"><span>AKTUELLE GESAMTMAẞE</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
-          <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>Duplizieren</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>Löschen</button></div>
-        </div> : <div className="no-selection"><span>◇</span><strong>Kein Objekt ausgewählt</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
+          <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
+        </div> : <div className="no-selection"><span>◇</span><strong>{t("noObject")}</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
         <div className="right-footer"><span>3DMAKER</span><span>v{APP_VERSION} · EXPERIMENTELL</span></div>
       </aside>
