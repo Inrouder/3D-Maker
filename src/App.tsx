@@ -900,7 +900,7 @@ export default function App() {
             else if (obj.groupId) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
             else setSelectedIds([obj.id]);
           }}>
-            <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId ? <><span className="group-mark" title={`Gruppenmitglied · ${obj.groupId}`}>GRUPPE</span><span className="object-name">{obj.name}</span></> : <span className="object-name">{obj.name}</span>}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
+            <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId && <span className="group-mark" title={`Gruppenmitglied · ${obj.groupId}`}>GRUPPE</span>}{obj.name}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
           </button>)}
           {objects.length === 0 && <div className="empty-list">Noch keine Objekte vorhanden.</div>}
         </div>
