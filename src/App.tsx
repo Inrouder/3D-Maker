@@ -23,7 +23,7 @@ type ModelObject = {
   groupId?: string;
 };
 
-const APP_VERSION = '0.1.1';
+const APP_VERSION = '0.1.2';
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const initialObject = (): ModelObject => ({
   id: makeId(), name: 'Quader', type: 'box', position: [0, 0, 0],
@@ -410,25 +410,41 @@ export default function App() {
   };
 
   const subtract = useCallback(() => {
-    if (selectedIds.length !== 2) {
-      setStatus('Bitte zuerst das Zielobjekt, dann mit Umschalt-Klick den Schneidkörper auswählen.');
+    if (selectedIds.length < 2) {
+      setStatus('Bitte zuerst das Zielobjekt bzw. die Gruppe wählen, dann mit Umschalt-Klick den Schneidkörper auswählen.');
       return;
     }
-    const [targetId, cutterId] = selectedIds;
-    const target = meshMapRef.current.get(targetId);
-    const cutter = meshMapRef.current.get(cutterId);
-    const targetData = objects.find(o => o.id === targetId);
-    if (!target || !cutter || !targetData) {
-      setStatus('Objekte konnten nicht für die Schnittoperation vorbereitet werden.');
+    const firstTarget = objects.find(o => o.id === selectedIds[0]);
+    if (!firstTarget) {
+      setStatus('Zielobjekt konnte nicht gefunden werden.');
+      return;
+    }
+    const targetMembers = firstTarget.groupId
+      ? objects.filter(o => o.groupId === firstTarget.groupId)
+      : [firstTarget];
+    const targetIds = new Set(targetMembers.map(o => o.id));
+    const cutterId = selectedIds.find(id => !targetIds.has(id));
+    const cutter = cutterId ? meshMapRef.current.get(cutterId) : undefined;
+    if (!cutterId || !cutter) {
+      setStatus('Bitte zuerst ein Zielobjekt oder eine Gruppe auswählen und anschließend den Schneidkörper mit Umschalt-Klick hinzufügen.');
+      return;
+    }
+    const cutterData = objects.find(o => o.id === cutterId);
+    if (!cutterData) {
+      setStatus('Schneidkörper konnte nicht gefunden werden.');
+      return;
+    }
+    const targets = targetMembers.filter(item => item.id !== cutterId);
+    if (!targets.length) {
+      setStatus('Die Gruppe enthält keine schneidbaren Zielobjekte.');
       return;
     }
     setBusy(true);
-    setStatus('Ausschnitt wird vorbereitet …');
+    setStatus(targetMembers.length > 1
+      ? `Gruppenschnitt wird vorbereitet · ${targets.length} Objekte …`
+      : 'Ausschnitt wird vorbereitet …');
     try {
-      target.updateMatrixWorld(true);
       cutter.updateMatrixWorld(true);
-      // CSG needs clean, indexed triangle geometry. STL and some previous CSG results
-      // can contain non-indexed vertices or stale material groups, so normalize every input.
       const prepareCsgGeometry = (mesh: THREE.Mesh) => {
         let geometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
         const position = geometry.getAttribute('position');
@@ -436,15 +452,10 @@ export default function App() {
           geometry.dispose();
           throw new Error('Ein Körper besitzt keine gültigen Positionsdaten.');
         }
-        // three-bvh-csg expects UV attributes even for plain, untextured solids.
-        // Generated/custom/STL geometry may not include them, so add neutral UVs.
         const uv = geometry.getAttribute('uv');
         if (!uv || uv.count !== position.count || uv.itemSize !== 2) {
           geometry.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(position.count * 2), 2));
         }
-        // The CSG evaluator only needs positions, normals and UVs. Strip malformed or
-        // mismatched auxiliary attributes so imported meshes and previous cut results
-        // can be reused reliably in later Boolean operations.
         const normal = geometry.getAttribute('normal');
         if (!normal || normal.count !== position.count || normal.itemSize !== 3) {
           geometry.deleteAttribute('normal');
@@ -467,57 +478,80 @@ export default function App() {
         geometry.addGroup(0, indexCount, 0);
         return geometry;
       };
-      const targetGeometry = prepareCsgGeometry(target);
       const cutterGeometry = prepareCsgGeometry(cutter);
-      const targetMaterial = new THREE.MeshStandardMaterial({ color: targetData.color, side: THREE.DoubleSide });
       const cutterMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide });
-      const targetBrush = new Brush(targetGeometry, targetMaterial);
       const cutterBrush = new Brush(cutterGeometry, cutterMaterial);
-      targetBrush.updateMatrixWorld(true);
       cutterBrush.updateMatrixWorld(true);
       const evaluator = new Evaluator();
       evaluator.useGroups = false;
-      setStatus('Boolean-Schnitt wird berechnet …');
-      const result = evaluator.evaluate(targetBrush, cutterBrush, SUBTRACTION);
-      if (!result.geometry.getAttribute('position') || result.geometry.getAttribute('position').count < 3) {
-        result.geometry.dispose();
-        throw new Error('Die Schnittberechnung lieferte keine gültige Geometrie. Prüfe, ob sich beide Körper überschneiden.');
-      }
-      targetGeometry.dispose();
-      cutterGeometry.dispose();
-      targetMaterial.dispose();
-      cutterMaterial.dispose();
-      const geometry = result.geometry;
-      geometry.computeBoundingBox();
-      const bounds = geometry.boundingBox;
-      if (!bounds) throw new Error('Das Ergebnis hat keine gültigen Abmessungen.');
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      bounds.getSize(size);
-      bounds.getCenter(center);
-      geometry.translate(-center.x, -center.y, -center.z);
-      geometry.clearGroups();
-      // Keep the evaluator's result attributes intact. mergeVertices() can fail on
-      // CSG output with incomplete auxiliary attributes, even when position geometry is valid.
-      const positionAttribute = geometry.getAttribute('position');
-      if (!positionAttribute || positionAttribute.count < 3) {
+      const replacements = new Map<string, ModelObject>();
+      for (let i = 0; i < targets.length; i++) {
+        const targetData = targets[i];
+        const target = meshMapRef.current.get(targetData.id);
+        if (!target) throw new Error(`Zielobjekt „${targetData.name}“ ist nicht in der Szene vorhanden.`);
+        target.updateMatrixWorld(true);
+        const targetGeometry = prepareCsgGeometry(target);
+        const targetMaterial = new THREE.MeshStandardMaterial({ color: targetData.color, side: THREE.DoubleSide });
+        const targetBrush = new Brush(targetGeometry, targetMaterial);
+        targetBrush.updateMatrixWorld(true);
+        setStatus(targets.length > 1
+          ? `Gruppenschnitt: ${i + 1} von ${targets.length} Objekten …`
+          : 'Boolean-Schnitt wird berechnet …');
+        const result = evaluator.evaluate(targetBrush, cutterBrush, SUBTRACTION);
+        targetGeometry.dispose();
+        targetMaterial.dispose();
+        if (!result.geometry.getAttribute('position') || result.geometry.getAttribute('position').count < 3) {
+          result.geometry.dispose();
+          throw new Error(`Der Schnitt bei „${targetData.name}“ lieferte keine gültige Geometrie. Prüfe, ob sich Schneidkörper und Objekt überschneiden.`);
+        }
+        const geometry = result.geometry;
+        geometry.computeBoundingBox();
+        const bounds = geometry.boundingBox;
+        if (!bounds) {
+          geometry.dispose();
+          throw new Error(`Für „${targetData.name}“ konnten keine Abmessungen ermittelt werden.`);
+        }
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        bounds.getSize(size);
+        bounds.getCenter(center);
+        geometry.translate(-center.x, -center.y, -center.z);
+        geometry.clearGroups();
+        const positionAttribute = geometry.getAttribute('position');
+        if (!positionAttribute || positionAttribute.count < 3) {
+          geometry.dispose();
+          throw new Error(`„${targetData.name}“ lieferte keine gültigen Positionsdaten.`);
+        }
+        geometry.computeVertexNormals();
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
+        const positions = Array.from(positionAttribute.array as ArrayLike<number>);
+        const index = geometry.getIndex();
+        const indices = index?.array ? Array.from(index.array as ArrayLike<number>) : null;
+        if (positions.length < 9) {
+          geometry.dispose();
+          throw new Error(`„${targetData.name}“ enthält keine gültige Oberfläche.`);
+        }
+        replacements.set(targetData.id, {
+          ...targetData,
+          type: 'custom',
+          position: [center.x, center.y, center.z],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+          dimensions: [size.x, size.y, size.z],
+          geometryData: { positions, indices }
+        });
         geometry.dispose();
-        throw new Error('Die Schnittberechnung lieferte keine gültigen Positionsdaten.');
       }
-      geometry.computeVertexNormals();
-      geometry.computeBoundingBox();
-      geometry.computeBoundingSphere();
-      const positions = Array.from(positionAttribute.array as ArrayLike<number>);
-      const index = geometry.getIndex();
-      const indices = index?.array ? Array.from(index.array as ArrayLike<number>) : null;
-      if (positions.length < 9) throw new Error('Das Ergebnis enthält keine gültige Oberfläche.');
-      const replacement: ModelObject = {
-        ...targetData, type: 'custom', position: [center.x, center.y, center.z], rotation: [0, 0, 0], scale: [1, 1, 1],
-        dimensions: [size.x, size.y, size.z], geometryData: { positions, indices }
-      };
-      setObjects(prev => prev.filter(o => o.id !== cutterId).map(o => o.id === targetId ? replacement : o));
-      setSelectedIds([targetId]);
-      setStatus('Ausschnitt erfolgreich erstellt. Der Schneidkörper wurde entfernt.');
+      cutterGeometry.dispose();
+      cutterMaterial.dispose();
+      setObjects(prev => prev
+        .filter(o => o.id !== cutterId)
+        .map(o => replacements.get(o.id) ?? o));
+      setSelectedIds(targets.map(o => o.id));
+      setStatus(targets.length > 1
+        ? `Gruppenschnitt erfolgreich: ${targets.length} Objekte wurden ausgeschnitten. Schneidkörper entfernt.`
+        : 'Ausschnitt erfolgreich erstellt. Der Schneidkörper wurde entfernt.');
     } catch (error) {
       console.error(error);
       setStatus(`Ausschnitt fehlgeschlagen: ${error instanceof Error ? error.message : 'Geometriefehler'}`);
@@ -866,7 +900,7 @@ export default function App() {
             else if (obj.groupId) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
             else setSelectedIds([obj.id]);
           }}>
-            <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId ? '▦ ' : ''}{obj.name}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
+            <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId ? <><span className="group-mark" title={`Gruppenmitglied · ${obj.groupId}`}>GRUPPE</span><span className="object-name">{obj.name}</span></> : <span className="object-name">{obj.name}</span>}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
           </button>)}
           {objects.length === 0 && <div className="empty-list">Noch keine Objekte vorhanden.</div>}
         </div>
