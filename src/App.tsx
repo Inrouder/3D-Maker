@@ -453,7 +453,7 @@ export default function App() {
     }
   }, [selectedIds]);
 
-  const addShape = (type: ShapeType) => {
+  const addShape = (type: Exclude<ShapeType, 'text' | 'gear' | 'thread'>) => {
     const names: Record<ShapeType, string> = { box: 'Quader', cylinder: 'Zylinder', sphere: 'Kugel', cone: 'Kegel', custom: 'Importiertes Mesh' };
     const dimensions: Record<ShapeType, [number, number, number]> = {
       box: [30, 12, 30], cylinder: [6, 100, 6], sphere: [20, 20, 20], cone: [20, 30, 20], custom: [20, 20, 20]
