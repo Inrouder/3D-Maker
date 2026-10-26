@@ -576,8 +576,8 @@ export default function App() {
           const t0 = along * stride + i;
           const t1 = t0 + 1;
           // Gegenläufige Wicklung für äußere Flächennormalen.
-          indices.push(bottomCenter, b1, b0);
-          indices.push(topCenter, t0, t1);
+          indices.push(bottomCenter, b0, b1);
+          indices.push(topCenter, t1, t0);
         }
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
