@@ -23,7 +23,7 @@ type ModelObject = {
   groupId?: string;
 };
 
-const APP_VERSION = '0.1.3';
+const APP_VERSION = '0.1.4';
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const initialObject = (): ModelObject => ({
   id: makeId(), name: 'Quader', type: 'box', position: [0, 0, 0],
@@ -89,6 +89,7 @@ export default function App() {
   const meshMapRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const visualGroupMapRef = useRef<Map<string, THREE.Group>>(new Map());
   const cutPreviewRef = useRef<THREE.LineSegments | null>(null);
+  const cutHandleRef = useRef<THREE.Object3D | null>(null);
   const dragRef = useRef<{ id: string; groupId?: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
   const cloneObjects = (items: ModelObject[]) => JSON.parse(JSON.stringify(items)) as ModelObject[];
@@ -170,6 +171,10 @@ export default function App() {
     controlsRef.current = controls;
     const transformControls = new TransformControls(camera, renderer.domElement);
     transformControls.setMode('scale');
+    const cutHandle = new THREE.Object3D();
+    cutHandle.userData.isCutHandle = true;
+    scene.add(cutHandle);
+    cutHandleRef.current = cutHandle;
     transformControls.setSpace('local');
     scene.add(transformControls.getHelper());
     transformControlsRef.current = transformControls;
@@ -177,6 +182,12 @@ export default function App() {
       controls.enabled = !event.value;
       if (!event.value) {
         const object = transformControls.object;
+        if (object?.userData.isCutHandle) {
+          const axis = object.userData.cutAxis as 'x' | 'y' | 'z';
+          const value = axis === 'x' ? object.position.x : axis === 'y' ? object.position.y : object.position.z;
+          setStatus(`Schnittposition eingestellt: ${value.toFixed(2)} mm · Alt+C zum Teilen.`);
+          return;
+        }
         const id = object?.userData.modelId as string | undefined;
         const groupId = object?.userData.groupId as string | undefined;
         if (object && groupId) {
@@ -201,6 +212,11 @@ export default function App() {
     });
     transformControls.addEventListener('objectChange', () => {
       const object = transformControls.object;
+      if (object?.userData.isCutHandle) {
+        const axis = object.userData.cutAxis as 'x' | 'y' | 'z';
+        setCutPosition(axis === 'x' ? object.position.x : axis === 'y' ? object.position.y : object.position.z);
+        return;
+      }
       const id = object?.userData.modelId as string | undefined;
       const model = objectsRef.current.find(obj => obj.id === id);
       if (!object || !model) return;
@@ -351,10 +367,34 @@ export default function App() {
     const groupedSelection = selectedObjects.length > 1 && selectedObjects.every(obj=>obj.groupId && obj.groupId===selectedObjects[0].groupId);
     const activeMesh = selectedObjects.length===1 ? (selectedObjects[0].groupId ? visualGroupMapRef.current.get(selectedObjects[0].groupId!) : meshMapRef.current.get(selectedObjects[0].id)) : undefined;
     if (gizmo) {
-      if (groupedSelection) { const pivot=visualGroupMapRef.current.get(selectedObjects[0].groupId!); if(pivot){gizmo.attach(pivot);gizmo.setMode(transformMode);}else gizmo.detach(); }
-      else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
+      if (cutMode) {
+        const handle = cutHandleRef.current;
+        if (handle && selectedObjects.length === 1) {
+          const mesh = meshMapRef.current.get(selectedObjects[0].id);
+          if (mesh) {
+            mesh.updateMatrixWorld(true);
+            const bounds = new THREE.Box3().setFromObject(mesh);
+            if (!bounds.isEmpty()) {
+              const center = bounds.getCenter(new THREE.Vector3());
+              handle.position.copy(center);
+              if (cutAxis === 'x') handle.position.x = cutPosition;
+              else if (cutAxis === 'y') handle.position.y = cutPosition;
+              else handle.position.z = cutPosition;
+              handle.userData.cutAxis = cutAxis;
+              gizmo.attach(handle);
+              gizmo.setMode('translate');
+              gizmo.setSpace('world');
+              gizmo.showX = cutAxis === 'x'; gizmo.showY = cutAxis === 'y'; gizmo.showZ = cutAxis === 'z';
+            } else gizmo.detach();
+          } else gizmo.detach();
+        } else gizmo.detach();
+      } else {
+        gizmo.showX = true; gizmo.showY = true; gizmo.showZ = true;
+        if (groupedSelection) { const pivot=visualGroupMapRef.current.get(selectedObjects[0].groupId!); if(pivot){gizmo.attach(pivot);gizmo.setMode(transformMode);}else gizmo.detach(); }
+        else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
+      }
     }
-  }, [objects, selectedIds, transformMode]);
+  }, [objects, selectedIds, transformMode, cutMode, cutAxis]);
 
   useEffect(() => {
     const scene=sceneRef.current; if(!scene)return;
@@ -699,7 +739,8 @@ export default function App() {
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(); return; }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r') { event.preventDefault(); redo(); return; }
-      if (event.key.toLowerCase() === 'h') { event.preventDefault(); subtract(); }
+      if (event.key.toLowerCase() === 'h' && !event.altKey) { event.preventDefault(); subtract(); }
+      if (event.altKey && event.key.toLowerCase() === 'c') { event.preventDefault(); cutAtPlane(); return; }
       if (event.key.toLowerCase() === 'c' && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         setCutMode(previous => { const next = !previous; setStatus(next ? 'Schnittmodus aktiv · Ebene einstellen und Objekt teilen.' : 'Schnittmodus beendet.'); return next; });
@@ -713,7 +754,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [subtract, selectedIds, historyVersion]);
+  }, [subtract, cutAtPlane, selectedIds, historyVersion]);
 
   const saveProject = () => {
     const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
