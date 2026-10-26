@@ -537,11 +537,17 @@ export default function App() {
         }
         const helix = new THREE.BufferGeometry();
         helix.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); helix.setIndex(indices); helix.computeVertexNormals();
+        // BufferGeometryUtils.mergeGeometries verlangt bei allen Teilen exakt
+        // dieselben Attribute. CylinderGeometry enthält zusätzlich UVs, die
+        // unsere selbst erzeugte Helix nicht benötigt.
         const core = new THREE.CylinderGeometry(Math.max(1, radius - pitch * .35), Math.max(1, radius - pitch * .35), length, 48, 1);
         core.translate(0, length / 2, 0);
+        core.deleteAttribute('uv');
+        core.computeVertexNormals();
+        helix.computeVertexNormals();
         const merged = mergeGeometries([core, helix], false);
         core.dispose(); helix.dispose();
-        if (!merged) throw new Error('Gewindegeometrie konnte nicht zusammengefügt werden.');
+        if (!merged) throw new Error('Gewindeteile haben inkompatible Geometrieattribute.');
         addGeneratedGeometry('Gewinde M' + diameter + ' × ' + pitch, merged, 'thread');
       }
     } catch (error) {
