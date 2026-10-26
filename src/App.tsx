@@ -7,7 +7,7 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { Brush, Evaluator, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
+import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
 
 type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom';
 type ModelObject = {
@@ -23,7 +23,7 @@ type ModelObject = {
   groupId?: string;
 };
 
-const APP_VERSION = '0.1.2';
+const APP_VERSION = '0.1.3';
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const initialObject = (): ModelObject => ({
   id: makeId(), name: 'Quader', type: 'box', position: [0, 0, 0],
@@ -423,28 +423,30 @@ export default function App() {
       ? objects.filter(o => o.groupId === firstTarget.groupId)
       : [firstTarget];
     const targetIds = new Set(targetMembers.map(o => o.id));
-    const cutterId = selectedIds.find(id => !targetIds.has(id));
-    const cutter = cutterId ? meshMapRef.current.get(cutterId) : undefined;
-    if (!cutterId || !cutter) {
+    const cutterSelectedId = selectedIds.find(id => !targetIds.has(id));
+    const cutterData = cutterSelectedId ? objects.find(o => o.id === cutterSelectedId) : undefined;
+    if (!cutterSelectedId || !cutterData) {
       setStatus('Bitte zuerst ein Zielobjekt oder eine Gruppe auswählen und anschließend den Schneidkörper mit Umschalt-Klick hinzufügen.');
       return;
     }
-    const cutterData = objects.find(o => o.id === cutterId);
-    if (!cutterData) {
-      setStatus('Schneidkörper konnte nicht gefunden werden.');
-      return;
-    }
-    const targets = targetMembers.filter(item => item.id !== cutterId);
+    // Selecting any member of a group as the cutter means the entire group is used
+    // as one combined cutting volume, even when only one member was shift-clicked.
+    const cutterMembers = cutterData.groupId
+      ? objects.filter(o => o.groupId === cutterData.groupId)
+      : [cutterData];
+    const cutterIds = new Set(cutterMembers.map(o => o.id));
+    const targets = targetMembers.filter(item => !cutterIds.has(item.id));
     if (!targets.length) {
-      setStatus('Die Gruppe enthält keine schneidbaren Zielobjekte.');
+      setStatus('Ziel- und Schneidgruppe müssen unterschiedliche Objekte enthalten.');
       return;
     }
     setBusy(true);
-    setStatus(targetMembers.length > 1
-      ? `Gruppenschnitt wird vorbereitet · ${targets.length} Objekte …`
-      : 'Ausschnitt wird vorbereitet …');
+    setStatus(cutterMembers.length > 1
+      ? `Schneidgruppe wird zusammengeführt · ${cutterMembers.length} Körper …`
+      : targets.length > 1
+        ? `Gruppenschnitt wird vorbereitet · ${targets.length} Objekte …`
+        : 'Ausschnitt wird vorbereitet …');
     try {
-      cutter.updateMatrixWorld(true);
       const prepareCsgGeometry = (mesh: THREE.Mesh) => {
         let geometry = mesh.geometry.clone().applyMatrix4(mesh.matrixWorld);
         const position = geometry.getAttribute('position');
@@ -478,12 +480,38 @@ export default function App() {
         geometry.addGroup(0, indexCount, 0);
         return geometry;
       };
-      const cutterGeometry = prepareCsgGeometry(cutter);
-      const cutterMaterial = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide });
-      const cutterBrush = new Brush(cutterGeometry, cutterMaterial);
-      cutterBrush.updateMatrixWorld(true);
       const evaluator = new Evaluator();
       evaluator.useGroups = false;
+      let cutterBrush: Brush | null = null;
+      let cutterGeometry: THREE.BufferGeometry | null = null;
+      let cutterMaterial: THREE.MeshStandardMaterial | null = null;
+      for (let i = 0; i < cutterMembers.length; i++) {
+        const member = cutterMembers[i];
+        const mesh = meshMapRef.current.get(member.id);
+        if (!mesh) throw new Error(`Schneidobjekt „${member.name}“ ist nicht in der Szene vorhanden.`);
+        mesh.updateMatrixWorld(true);
+        const geometry = prepareCsgGeometry(mesh);
+        const material = new THREE.MeshStandardMaterial({ color: member.color, side: THREE.DoubleSide });
+        const brush = new Brush(geometry, material);
+        brush.updateMatrixWorld(true);
+        if (!cutterBrush) {
+          cutterBrush = brush;
+          cutterGeometry = geometry;
+          cutterMaterial = material;
+        } else {
+          setStatus(`Schneidgruppe: ${i + 1} von ${cutterMembers.length} Körpern zusammenführen …`);
+          const combined = evaluator.evaluate(cutterBrush, brush, ADDITION);
+          cutterGeometry?.dispose();
+          cutterMaterial?.dispose();
+          geometry.dispose();
+          material.dispose();
+          cutterBrush = combined;
+          cutterGeometry = combined.geometry;
+          cutterMaterial = null;
+          cutterBrush.updateMatrixWorld(true);
+        }
+      }
+      if (!cutterBrush) throw new Error('Die Schneidgruppe enthält keine gültigen Körper.');
       const replacements = new Map<string, ModelObject>();
       for (let i = 0; i < targets.length; i++) {
         const targetData = targets[i];
@@ -543,15 +571,17 @@ export default function App() {
         });
         geometry.dispose();
       }
-      cutterGeometry.dispose();
-      cutterMaterial.dispose();
+      cutterGeometry?.dispose();
+      cutterMaterial?.dispose();
       setObjects(prev => prev
-        .filter(o => o.id !== cutterId)
+        .filter(o => !cutterIds.has(o.id))
         .map(o => replacements.get(o.id) ?? o));
       setSelectedIds(targets.map(o => o.id));
-      setStatus(targets.length > 1
-        ? `Gruppenschnitt erfolgreich: ${targets.length} Objekte wurden ausgeschnitten. Schneidkörper entfernt.`
-        : 'Ausschnitt erfolgreich erstellt. Der Schneidkörper wurde entfernt.');
+      setStatus(cutterMembers.length > 1
+        ? `Gruppenschnitt erfolgreich: ${cutterMembers.length} Schneidkörper angewendet; ${targets.length} Zielobjekt(e) ausgeschnitten.`
+        : targets.length > 1
+          ? `Gruppenschnitt erfolgreich: ${targets.length} Objekte wurden ausgeschnitten.`
+          : 'Ausschnitt erfolgreich erstellt. Der Schneidkörper wurde entfernt.');
     } catch (error) {
       console.error(error);
       setStatus(`Ausschnitt fehlgeschlagen: ${error instanceof Error ? error.message : 'Geometriefehler'}`);
