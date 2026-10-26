@@ -53,3 +53,11 @@
 .theme-light .settings-trigger{background:#edf1f6}
 .theme-light .settings-backdrop{background:rgba(31,41,55,.38)}
 @media(max-width:1100px){.settings-trigger span{display:none}.settings-trigger{padding:8px 10px}}
+
+/* Parametric geometry creator dialogs */
+.creator-field{display:flex;flex-direction:column;gap:7px;margin:17px 0;color:var(--muted);font-size:12px}
+.creator-field input{width:100%;font-size:13px;padding:10px 11px}
+.creator-hint{font-size:11px;line-height:1.65;color:var(--muted);background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:10px 12px;margin:14px 0 5px}
+.creator-dialog .settings-footer{gap:8px}
+.creator-dialog .settings-footer button{min-width:120px}
+.theme-light .creator-hint{background:#f2f5f9;color:#58677a}
