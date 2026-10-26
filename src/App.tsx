@@ -500,7 +500,7 @@ export default function App() {
           cutterMaterial = material;
         } else {
           setStatus(`Schneidgruppe: ${i + 1} von ${cutterMembers.length} Körpern zusammenführen …`);
-          const combined = evaluator.evaluate(cutterBrush, brush, ADDITION);
+          const combined: Brush = evaluator.evaluate(cutterBrush, brush, ADDITION);
           cutterGeometry?.dispose();
           cutterMaterial?.dispose();
           geometry.dispose();
@@ -508,7 +508,7 @@ export default function App() {
           cutterBrush = combined;
           cutterGeometry = combined.geometry;
           cutterMaterial = null;
-          cutterBrush.updateMatrixWorld(true);
+          combined.updateMatrixWorld(true);
         }
       }
       if (!cutterBrush) throw new Error('Die Schneidgruppe enthält keine gültigen Körper.');
