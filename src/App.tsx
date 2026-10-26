@@ -5,11 +5,15 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
+import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
+import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+import helvetikerFont from 'three/examples/fonts/helvetiker_regular.typeface.json';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
 
-type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom';
+type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom' | 'text' | 'gear' | 'thread';
+type CreatorMode = 'text' | 'gear' | 'thread';
 type ModelObject = {
   id: string;
   name: string;
@@ -23,7 +27,7 @@ type ModelObject = {
   groupId?: string;
 };
 
-const APP_VERSION = '0.1.5';
+const APP_VERSION = '0.1.6';
 type AppLanguage = 'de' | 'en';
 type AppTheme = 'dark' | 'light';
 const uiText: Record<AppLanguage, Record<string, string>> = {
@@ -92,6 +96,16 @@ export default function App() {
   const [appTheme, setAppTheme] = useState<AppTheme>(() => (localStorage.getItem('3dmaker-theme') as AppTheme) || 'dark');
   const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => (localStorage.getItem('3dmaker-language') as AppLanguage) || 'de');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [creatorMode, setCreatorMode] = useState<CreatorMode | null>(null);
+  const [textValue, setTextValue] = useState('3D Maker');
+  const [textSize, setTextSize] = useState(20);
+  const [textDepth, setTextDepth] = useState(5);
+  const [gearTeeth, setGearTeeth] = useState(16);
+  const [gearModule, setGearModule] = useState(2);
+  const [gearThickness, setGearThickness] = useState(8);
+  const [threadDiameter, setThreadDiameter] = useState(20);
+  const [threadPitch, setThreadPitch] = useState(2.5);
+  const [threadLength, setThreadLength] = useState(20);
   const t = (key: string) => uiText[appLanguage][key] ?? key;
   const selectedIdRef = useRef<string | undefined>(undefined);
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('scale');
@@ -452,6 +466,87 @@ export default function App() {
     setObjects(prev => [...prev, obj]);
     setSelectedIds([obj.id]);
     setStatus(`${obj.name} erstellt`);
+  };
+
+  const addGeneratedGeometry = (name: string, geometry: THREE.BufferGeometry, type: ShapeType) => {
+    geometry.computeBoundingBox();
+    const bounds = geometry.boundingBox;
+    if (!bounds) { setStatus('Geometrie konnte nicht erstellt werden.'); geometry.dispose(); return; }
+    const center = new THREE.Vector3(), size = new THREE.Vector3();
+    bounds.getCenter(center); bounds.getSize(size);
+    geometry.translate(-center.x, -center.y, -center.z);
+    geometry.computeVertexNormals();
+    const positions = Array.from(geometry.getAttribute('position').array as ArrayLike<number>);
+    const index = geometry.getIndex();
+    const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
+    geometry.dispose();
+    const obj: ModelObject = {
+      id: makeId(), name, type, position: [0, Math.max(size.y / 2, 0), 0],
+      rotation: [0, 0, 0], scale: [1, 1, 1], color: type === 'gear' ? '#e7a64b' : '#43b6a8',
+      dimensions: [Math.max(size.x, .1), Math.max(size.y, .1), Math.max(size.z, .1)],
+      geometryData: { positions, indices }
+    };
+    setObjects(prev => [...prev, obj]); setSelectedIds([obj.id]); setCreatorMode(null);
+    setStatus(name + ' erstellt · ' + obj.dimensions.map(v => v.toFixed(1)).join(' × ') + ' mm');
+  };
+
+  const createAdvancedObject = () => {
+    try {
+      if (creatorMode === 'text') {
+        const value = textValue.trim();
+        if (!value) { setStatus('Bitte einen Text eingeben.'); return; }
+        const font = new FontLoader().parse(helvetikerFont as unknown as Parameters<FontLoader['parse']>[0]);
+        const geometry = new TextGeometry(value.slice(0, 100), {
+          font, size: THREE.MathUtils.clamp(textSize, 2, 200), depth: THREE.MathUtils.clamp(textDepth, .5, 100),
+          curveSegments: 8, bevelEnabled: false
+        });
+        addGeneratedGeometry('Text: ' + value.slice(0, 24), geometry, 'text');
+      } else if (creatorMode === 'gear') {
+        const teeth = Math.round(THREE.MathUtils.clamp(gearTeeth, 6, 120));
+        const m = THREE.MathUtils.clamp(gearModule, .5, 20);
+        const outer = m * (teeth + 2) / 2, root = m * (teeth - 2.5) / 2;
+        const shape = new THREE.Shape();
+        for (let i = 0; i < teeth * 4; i++) {
+          const a = i * Math.PI * 2 / (teeth * 4) - Math.PI / 2;
+          const r = (i % 4 === 1 || i % 4 === 2) ? outer : root;
+          const x = Math.cos(a) * r, y = Math.sin(a) * r;
+          if (i === 0) shape.moveTo(x, y); else shape.lineTo(x, y);
+        }
+        shape.closePath();
+        const hole = new THREE.Path();
+        hole.absarc(0, 0, Math.max(m * 1.5, root * .18), 0, Math.PI * 2, true);
+        shape.holes.push(hole);
+        const geometry = new THREE.ExtrudeGeometry(shape, { depth: THREE.MathUtils.clamp(gearThickness, 1, 100), bevelEnabled: false, curveSegments: 2 });
+        geometry.rotateX(-Math.PI / 2);
+        addGeneratedGeometry('Zahnrad ' + teeth + ' Zähne', geometry, 'gear');
+      } else if (creatorMode === 'thread') {
+        const diameter = THREE.MathUtils.clamp(threadDiameter, 3, 200);
+        const pitch = THREE.MathUtils.clamp(threadPitch, .5, 20);
+        const length = THREE.MathUtils.clamp(threadLength, pitch, 500);
+        const radius = diameter / 2, turns = Math.max(1, Math.ceil(length / pitch));
+        const segments = Math.min(2400, turns * 48);
+        const profile = [[radius - pitch * .42, -pitch * .32], [radius + pitch * .08, -pitch * .12], [radius + pitch * .08, pitch * .12], [radius - pitch * .42, pitch * .32]];
+        const vertices: number[] = [], indices: number[] = [];
+        for (let i = 0; i <= segments; i++) {
+          const t = i / segments, a = t * turns * Math.PI * 2, y = t * length;
+          for (const p of profile) vertices.push(Math.cos(a) * p[0], y + p[1], Math.sin(a) * p[0]);
+        }
+        for (let i = 0; i < segments; i++) for (let j = 0; j < 4; j++) {
+          const a = i * 4 + j, b = i * 4 + (j + 1) % 4, d = (i + 1) * 4 + j, e = (i + 1) * 4 + (j + 1) % 4;
+          indices.push(a, b, d, b, e, d);
+        }
+        const helix = new THREE.BufferGeometry();
+        helix.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); helix.setIndex(indices); helix.computeVertexNormals();
+        const core = new THREE.CylinderGeometry(Math.max(1, radius - pitch * .35), Math.max(1, radius - pitch * .35), length, 48, 1);
+        core.translate(0, length / 2, 0);
+        const merged = mergeGeometries([core, helix], false);
+        core.dispose(); helix.dispose();
+        if (!merged) throw new Error('Gewindegeometrie konnte nicht zusammengefügt werden.');
+        addGeneratedGeometry('Gewinde M' + diameter + ' × ' + pitch, merged, 'thread');
+      }
+    } catch (error) {
+      setStatus('Erstellung fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Unbekannter Fehler'));
+    }
   };
 
   const updateSelected = (patch: Partial<ModelObject>) => {
@@ -905,6 +1000,12 @@ export default function App() {
   return <main className={`app-shell theme-${appTheme}`}>
     {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
 
+    {creatorMode && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setCreatorMode(null); }}><section className="settings-dialog creator-dialog" role="dialog" aria-modal="true" aria-labelledby="creator-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · PARAMETRISCHE FORM</span><h2 id="creator-title">{creatorMode === 'text' ? '3D-Text erstellen' : creatorMode === 'gear' ? 'Zahnrad erstellen' : 'Gewinde erstellen'}</h2></div><button className="settings-close" onClick={() => setCreatorMode(null)} aria-label="Schließen">×</button></header><div className="settings-content">
+      {creatorMode === 'text' && <><label className="creator-field">Text<input autoFocus maxLength={100} value={textValue} onChange={e => setTextValue(e.target.value)} placeholder="Dein Text" /></label><label className="creator-field">Buchstabenhöhe (mm)<input type="number" min="2" max="200" step="1" value={textSize} onChange={e => setTextSize(Number(e.target.value))} /></label><label className="creator-field">Extrusionstiefe (mm)<input type="number" min="0.5" max="100" step="0.5" value={textDepth} onChange={e => setTextDepth(Number(e.target.value))} /></label><p className="creator-hint">Erzeugt echte extrudierte 3D-Geometrie, keine Textur.</p></>}
+      {creatorMode === 'gear' && <><label className="creator-field">Zähnezahl<input type="number" min="6" max="120" step="1" value={gearTeeth} onChange={e => setGearTeeth(Number(e.target.value))} /></label><label className="creator-field">Modul (mm)<input type="number" min="0.5" max="20" step="0.5" value={gearModule} onChange={e => setGearModule(Number(e.target.value))} /></label><label className="creator-field">Dicke (mm)<input type="number" min="1" max="100" step="1" value={gearThickness} onChange={e => setGearThickness(Number(e.target.value))} /></label><p className="creator-hint">Außendurchmesser ungefähr Modul × (Zähnezahl + 2). Das Zahnrad hat eine zentrale Bohrung.</p></>}
+      {creatorMode === 'thread' && <><label className="creator-field">Nenndurchmesser (mm)<input type="number" min="3" max="200" step="1" value={threadDiameter} onChange={e => setThreadDiameter(Number(e.target.value))} /></label><label className="creator-field">Steigung (mm)<input type="number" min="0.5" max="20" step="0.5" value={threadPitch} onChange={e => setThreadPitch(Number(e.target.value))} /></label><label className="creator-field">Gewindelänge (mm)<input type="number" min="1" max="500" step="1" value={threadLength} onChange={e => setThreadLength(Number(e.target.value))} /></label><p className="creator-hint">Erstellt ein Außengewinde mit spiralförmigem Gewindegang und Kernkörper. Für passgenaue Normgewinde Maße nachbearbeiten.</p></>}
+      </div><footer className="settings-footer"><button className="secondary" onClick={() => setCreatorMode(null)}>Abbrechen</button><button className="primary" onClick={createAdvancedObject}>3D-Objekt erstellen</button></footer></section></div>}
+
     <header className="topbar">
       <div className="brand-mark">3D</div><div className="brand-copy"><strong>3DMaker</strong><span>OFFLINE 3D MODELLIERER</span></div>
       <div className="top-divider" />
@@ -930,6 +1031,9 @@ export default function App() {
             <button className="shape-button" onClick={() => addShape('cylinder')}><span className="shape-icon">⬭</span><span>{t("cylinder")}</span></button>
             <button className="shape-button" onClick={() => addShape('sphere')}><span className="shape-icon">●</span><span>{t("sphere")}</span></button>
             <button className="shape-button" onClick={() => addShape('cone')}><span className="shape-icon">▲</span><span>{t("cone")}</span></button>
+            <button className="shape-button" onClick={() => setCreatorMode('text')}><span className="shape-icon">T₃</span><span>3D-Text</span></button>
+            <button className="shape-button" onClick={() => setCreatorMode('gear')}><span className="shape-icon">⚙</span><span>Zahnrad</span></button>
+            <button className="shape-button" onClick={() => setCreatorMode('thread')}><span className="shape-icon">⤿</span><span>Gewinde</span></button>
           </div>
         </div>
         <div className="tool-section">
