@@ -523,31 +523,68 @@ export default function App() {
         const diameter = THREE.MathUtils.clamp(threadDiameter, 3, 200);
         const pitch = THREE.MathUtils.clamp(threadPitch, .5, 20);
         const length = THREE.MathUtils.clamp(threadLength, pitch, 500);
-        const radius = diameter / 2, turns = Math.max(1, Math.ceil(length / pitch));
-        const segments = Math.min(2400, turns * 48);
-        const profile = [[radius - pitch * .42, -pitch * .32], [radius + pitch * .08, -pitch * .12], [radius + pitch * .08, pitch * .12], [radius - pitch * .42, pitch * .32]];
-        const vertices: number[] = [], indices: number[] = [];
-        for (let i = 0; i <= segments; i++) {
-          const t = i / segments, a = t * turns * Math.PI * 2, y = t * length;
-          for (const p of profile) vertices.push(Math.cos(a) * p[0], y + p[1], Math.sin(a) * p[0]);
+        const radius = diameter / 2;
+        const turns = Math.max(1, Math.ceil(length / pitch));
+        // Erzeuge eine einzige geschlossene Mantelfläche: Der Radius folgt
+        // einem trapezförmigen Gewindeprofil entlang der Helix. Anders als
+        // Kernzylinder + separate Helix gibt es hier keine überlappenden
+        // Teilkörper und keine offenen Kanten zwischen den Teilen.
+        const around = Math.min(4096, turns * 64);
+        const along = Math.min(4096, turns * 32);
+        const rootRadius = Math.max(0.5, radius - pitch * 0.42);
+        const crestRadius = Math.max(rootRadius + 0.1, radius);
+        const vertices: number[] = [];
+        const indices: number[] = [];
+        const profileRadius = (phase: number) => {
+          const p = ((phase % 1) + 1) % 1;
+          // Crest, flank, root, flank: trapezförmiger Gewindequerschnitt.
+          if (p < 0.125 || p >= 0.875) return crestRadius;
+          if (p < 0.5) return crestRadius + (rootRadius - crestRadius) * ((p - 0.125) / 0.375);
+          if (p < 0.75) return rootRadius;
+          return rootRadius + (crestRadius - rootRadius) * ((p - 0.75) / 0.125);
+        };
+        // Mantelraster mit doppelter Nahtspalte, damit die Oberfläche an
+        // theta=0/2π exakt geschlossen trianguliert werden kann.
+        for (let j = 0; j <= along; j++) {
+          const y = (j / along) * length;
+          for (let i = 0; i <= around; i++) {
+            const theta = (i / around) * Math.PI * 2;
+            const phase = y / pitch - theta / (Math.PI * 2);
+            const r = profileRadius(phase);
+            vertices.push(Math.cos(theta) * r, y, Math.sin(theta) * r);
+          }
         }
-        for (let i = 0; i < segments; i++) for (let j = 0; j < 4; j++) {
-          const a = i * 4 + j, b = i * 4 + (j + 1) % 4, d = (i + 1) * 4 + j, e = (i + 1) * 4 + (j + 1) % 4;
-          indices.push(a, b, d, b, e, d);
+        const stride = around + 1;
+        for (let j = 0; j < along; j++) {
+          for (let i = 0; i < around; i++) {
+            const a = j * stride + i;
+            const b = a + 1;
+            const c = a + stride;
+            const d = c + 1;
+            indices.push(a, c, b, b, c, d);
+          }
         }
-        const helix = new THREE.BufferGeometry();
-        helix.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3)); helix.setIndex(indices); helix.computeVertexNormals();
-        // BufferGeometryUtils.mergeGeometries verlangt bei allen Teilen exakt
-        // dieselben Attribute. CylinderGeometry enthält zusätzlich UVs, die
-        // unsere selbst erzeugte Helix nicht benötigt.
-        const core = new THREE.CylinderGeometry(Math.max(1, radius - pitch * .35), Math.max(1, radius - pitch * .35), length, 48, 1);
-        core.translate(0, length / 2, 0);
-        core.deleteAttribute('uv');
-        core.computeVertexNormals();
-        helix.computeVertexNormals();
-        const merged = mergeGeometries([core, helix], false);
-        core.dispose(); helix.dispose();
-        if (!merged) throw new Error('Gewindeteile haben inkompatible Geometrieattribute.');
+        // Stirnflächen schließen den Körper vollständig. Jeweils ein
+        // Mittelpunkt und ein Dreiecksfächer, dessen Rand auf dem Mantel liegt.
+        const bottomCenter = vertices.length / 3;
+        vertices.push(0, 0, 0);
+        const topCenter = vertices.length / 3;
+        vertices.push(0, length, 0);
+        for (let i = 0; i < around; i++) {
+          const b0 = i;
+          const b1 = i + 1;
+          const t0 = along * stride + i;
+          const t1 = t0 + 1;
+          // Gegenläufige Wicklung für äußere Flächennormalen.
+          indices.push(bottomCenter, b1, b0);
+          indices.push(topCenter, t0, t1);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
         addGeneratedGeometry('Gewinde M' + diameter + ' × ' + pitch, merged, 'thread');
       }
     } catch (error) {
