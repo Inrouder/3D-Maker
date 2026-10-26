@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build and package test version
+  build-web:
+    name: Build browser version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,10 +29,37 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Package browser test version
+      - name: Package browser version
         uses: actions/upload-artifact@v4
         with:
-          name: 3DMaker-test-build
+          name: 3DMaker-web-build
           path: dist/
           if-no-files-found: error
           retention-days: 14
+
+  build-portable-windows:
+    name: Build portable Windows EXE
+    runs-on: windows-latest
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build portable application
+        run: npm run dist:portable
+
+      - name: Upload portable EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: 3DMaker-Portable-Windows-x64
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 30
