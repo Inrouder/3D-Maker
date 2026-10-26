@@ -376,14 +376,17 @@ export default function App() {
             const bounds = new THREE.Box3().setFromObject(mesh);
             if (!bounds.isEmpty()) {
               const center = bounds.getCenter(new THREE.Vector3());
-              handle.position.copy(center);
-              if (cutAxis === 'x') handle.position.x = cutPosition;
-              else if (cutAxis === 'y') handle.position.y = cutPosition;
-              else handle.position.z = cutPosition;
               handle.userData.cutAxis = cutAxis;
-              gizmo.attach(handle);
-              gizmo.setMode('translate');
-              gizmo.setSpace('world');
+              // Keep the live handle position while dragging; otherwise sync it to the numeric controls.
+              if (!gizmo.dragging) {
+                handle.position.copy(center);
+                if (cutAxis === 'x') handle.position.x = cutPosition;
+                else if (cutAxis === 'y') handle.position.y = cutPosition;
+                else handle.position.z = cutPosition;
+                gizmo.attach(handle);
+                gizmo.setMode('translate');
+                gizmo.setSpace('world');
+              }
               gizmo.showX = cutAxis === 'x'; gizmo.showY = cutAxis === 'y'; gizmo.showZ = cutAxis === 'z';
             } else gizmo.detach();
           } else gizmo.detach();
@@ -394,7 +397,7 @@ export default function App() {
         else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
       }
     }
-  }, [objects, selectedIds, transformMode, cutMode, cutAxis]);
+  }, [objects, selectedIds, transformMode, cutMode, cutAxis, cutPosition]);
 
   useEffect(() => {
     const scene=sceneRef.current; if(!scene)return;
