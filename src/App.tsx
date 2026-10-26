@@ -585,7 +585,7 @@ export default function App() {
         geometry.computeVertexNormals();
         geometry.computeBoundingBox();
         geometry.computeBoundingSphere();
-        addGeneratedGeometry('Gewinde M' + diameter + ' × ' + pitch, merged, 'thread');
+        addGeneratedGeometry('Gewinde M' + diameter + ' × ' + pitch, geometry, 'thread');
       }
     } catch (error) {
       setStatus('Erstellung fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Unbekannter Fehler'));
