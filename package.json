@@ -1,13 +1,14 @@
 {
   "name": "3d-maker",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "dist:portable": "npm run build && electron-builder --win portable"
+    "dist:portable": "npm run icon:generate && npm run build && electron-builder --win portable",
+    "icon:generate": "node build/generate-icon.cjs"
   },
   "dependencies": {
     "three": "^0.180.0",
@@ -23,7 +24,9 @@
     "typescript": "~5.8.3",
     "vite": "^7.1.0",
     "electron": "^38.2.0",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "sharp": "^0.34.4",
+    "png-to-ico": "^2.1.8"
   },
   "main": "electron/main.cjs",
   "build": {
@@ -35,6 +38,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "win": {
@@ -45,7 +49,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "portable": {
       "artifactName": "3D-Maker-Portable-${version}.${ext}"
