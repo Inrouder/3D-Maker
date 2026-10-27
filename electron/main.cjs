@@ -1,24 +1,8 @@
-const { app, BrowserWindow, shell, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const path = require('node:path');
-const fs = require('node:fs');
 const REPO = 'Inrouder/3D-Maker';
 app.setName('3D-Maker');
 
-function tokenPath() { return path.join(app.getPath('userData'), 'github-token.dat'); }
-function readToken() {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) return '';
-    return safeStorage.decryptString(fs.readFileSync(tokenPath()));
-  } catch { return ''; }
-}
-function saveToken(value) {
-  const token = typeof value === 'string' ? value.trim() : '';
-  if (!token) { try { fs.unlinkSync(tokenPath()); } catch {} return false; }
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('Sichere Speicherung ist auf diesem System nicht verfügbar.');
-  fs.mkdirSync(path.dirname(tokenPath()), { recursive: true });
-  fs.writeFileSync(tokenPath(), safeStorage.encryptString(token), { mode: 0o600 });
-  return true;
-}
 function versionParts(value) { return String(value || '').replace(/^v/i, '').split(/[.-]/).slice(0,3).map(n => Number.parseInt(n, 10) || 0); }
 function newer(next, current) {
   const a = versionParts(next), b = versionParts(current);
@@ -26,12 +10,10 @@ function newer(next, current) {
 }
 async function checkUpdates() {
   const headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': '3D-Maker-Updater', 'X-GitHub-Api-Version': '2022-11-28' };
-  const token = readToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers, signal: AbortSignal.timeout(12000) });
   if (!response.ok) {
-    if (response.status === 404) return { status: 'unavailable', message: 'Kein Release gefunden oder privates Repository nicht zugänglich. Für private Releases kann ein GitHub-Token hinterlegt werden.' };
-    if (response.status === 401 || response.status === 403) return { status: 'error', message: 'GitHub-Zugriff verweigert. Bitte Token und Berechtigungen prüfen.' };
+    if (response.status === 404) return { status: 'unavailable', message: 'Noch kein öffentliches GitHub Release veröffentlicht. Ein Versions-Tag mit angehängter Windows-EXE ist erforderlich.' };
+    if (response.status === 401 || response.status === 403) return { status: 'error', message: 'GitHub API-Limit erreicht oder Zugriff nicht möglich. Bitte später erneut prüfen.' };
     return { status: 'error', message: `GitHub antwortet mit HTTP ${response.status}.` };
   }
   const release = await response.json();
@@ -49,7 +31,7 @@ async function checkUpdates() {
 function createWindow() {
   const win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 960, minHeight: 640,
-    title: '3D-Maker', backgroundColor: '#111318', autoHideMenuBar: true,
+    title: '3D-Maker', icon: path.join(__dirname, '..', 'build', 'icon.png'), backgroundColor: '#111318', autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false, contextIsolation: true, sandbox: true
@@ -66,8 +48,6 @@ app.whenReady().then(() => {
     try { return await checkUpdates(); }
     catch (e) { return { status: 'error', message: e instanceof Error ? e.message : 'Updateprüfung fehlgeschlagen.' }; }
   });
-  ipcMain.handle('updates:token-present', () => Boolean(readToken()));
-  ipcMain.handle('updates:set-token', (_, token) => saveToken(token));
   ipcMain.handle('updates:open-release', () => shell.openExternal(`https://github.com/${REPO}/releases/latest`));
   createWindow();
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
