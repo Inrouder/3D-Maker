@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="3D-Maker">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#182d49"/><stop offset="1" stop-color="#061421"/></linearGradient>
+<linearGradient id="front" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0ee9ef"/><stop offset="1" stop-color="#0870d5"/></linearGradient>
+<linearGradient id="side" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#2187d6"/><stop offset="1" stop-color="#073b85"/></linearGradient>
+<linearGradient id="top" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#b0fcff"/><stop offset="1" stop-color="#24b8ff"/></linearGradient>
+<filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="9"/></filter>
+</defs>
+<rect x="10" y="10" width="492" height="492" rx="115" fill="url(#bg)"/>
+<path d="M255 77 411 165 411 340 255 431 101 340 101 165Z" fill="#12daff" opacity=".34" filter="url(#glow)"/>
+<path d="M255 73 420 168 420 344 255 439 92 344 92 168Z" fill="#091f3d" stroke="#4de7ff" stroke-width="16" stroke-linejoin="round"/>
+<path d="M255 96 392 174 255 251 119 174Z" fill="url(#top)"/>
+<path d="M119 192 255 272 255 409 119 330Z" fill="url(#side)"/>
+<path d="M392 192 255 272 255 409 392 330Z" fill="url(#front)"/>
+<path d="M255 251 255 408M119 174 255 251 392 174" fill="none" stroke="#062440" stroke-width="14" stroke-linejoin="round"/>
+<path d="M153 251 213 287 213 316 182 298 182 311 214 330 214 362 152 326 152 297 181 314 181 301 153 284Z" fill="#f5fdff" stroke="#07263c" stroke-width="3" stroke-linejoin="round"/>
+<path d="M288 293 347 260 368 271 368 331 346 345 288 379Z M316 309 316 343 339 329 339 296Z" fill="#e7faff" fill-rule="evenodd" stroke="#074071" stroke-width="3" stroke-linejoin="round"/>
+<path d="M143 171 255 107 370 172" fill="none" stroke="#f8feff" opacity=".7" stroke-width="6" stroke-linecap="round"/>
+</svg>
