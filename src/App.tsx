@@ -27,7 +27,10 @@ type ModelObject = {
   groupId?: string;
 };
 
-const APP_VERSION = '0.1.6';
+const APP_VERSION = '0.1.7';
+type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
+type UpdateBridge = { check: () => Promise<UpdateResult>; hasToken: () => Promise<boolean>; setToken: (token: string) => Promise<boolean>; openRelease: () => Promise<void> };
+declare global { interface Window { threeDMakerUpdates?: UpdateBridge } }
 type AppLanguage = 'de' | 'en';
 type AppTheme = 'dark' | 'light';
 const uiText: Record<AppLanguage, Record<string, string>> = {
@@ -96,6 +99,38 @@ export default function App() {
   const [appTheme, setAppTheme] = useState<AppTheme>(() => (localStorage.getItem('3dmaker-theme') as AppTheme) || 'dark');
   const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => (localStorage.getItem('3dmaker-language') as AppLanguage) || 'de');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [githubToken, setGithubToken] = useState('');
+  const [tokenPresent, setTokenPresent] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState('');
+  const checkForUpdates = useCallback(async () => {
+    const updater = window.threeDMakerUpdates;
+    if (!updater) { setUpdateInfo({ status: 'unavailable', message: 'Updateprüfung ist nur in der Windows-Desktop-App verfügbar.' }); return; }
+    setUpdateBusy(true);
+    try { setUpdateInfo(await updater.check()); }
+    catch { setUpdateInfo({ status: 'error', message: 'Die Updateprüfung konnte nicht ausgeführt werden.' }); }
+    finally { setUpdateBusy(false); }
+  }, []);
+  useEffect(() => {
+    if (!window.threeDMakerUpdates) return;
+    void window.threeDMakerUpdates.hasToken().then(setTokenPresent).catch(() => {});
+    void checkForUpdates();
+    const timer = window.setInterval(() => void checkForUpdates(), 6 * 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [checkForUpdates]);
+  const saveGithubToken = async () => {
+    try {
+      const present = await window.threeDMakerUpdates?.setToken(githubToken) ?? false;
+      setTokenPresent(present);
+      setGithubToken('');
+      setUpdateMessage(present ? 'GitHub-Token sicher gespeichert.' : 'Token entfernt.');
+      void checkForUpdates();
+    } catch (error) {
+      setUpdateMessage(error instanceof Error ? error.message : 'Token konnte nicht gespeichert werden.');
+    }
+  };
+
   const [creatorMode, setCreatorMode] = useState<CreatorMode | null>(null);
   const [textValue, setTextValue] = useState('3D Maker');
   const [textSize, setTextSize] = useState(20);
@@ -1041,7 +1076,7 @@ export default function App() {
   };
 
   return <main className={`app-shell theme-${appTheme}`}>
-    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
+    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-updates"><h3>{appLanguage === 'de' ? 'Programm-Updates' : 'Software updates'}</h3><p className="creator-hint">{appLanguage === 'de' ? 'Automatische Prüfung beim Start und alle 6 Stunden. Ein Update wird angezeigt, aber nie ohne Zustimmung installiert.' : 'Automatic check on startup and every 6 hours. Updates are never installed without your consent.'}</p><div className="about-row"><span>{appLanguage === 'de' ? 'Installiert' : 'Installed'}</span><strong>v{APP_VERSION}</strong></div>{updateInfo && <div className="about-row"><span>{appLanguage === 'de' ? 'Update-Status' : 'Update status'}</span><strong>{updateInfo.status === 'available' ? (appLanguage === 'de' ? 'Neue Version verfügbar' : 'Update available') : updateInfo.status === 'current' ? (appLanguage === 'de' ? 'Aktuell' : 'Up to date') : updateInfo.status === 'error' ? 'Fehler' : (appLanguage === 'de' ? 'Nicht verfügbar' : 'Unavailable')}</strong></div>}{updateInfo?.status === 'available' && <div className="update-notice"><strong>3D-Maker {updateInfo.latestVersion}</strong><p>{updateInfo.notes?.slice(0, 800) || (appLanguage === 'de' ? 'Eine neue Version steht bereit.' : 'A new release is available.')}</p><button className="primary" onClick={() => void window.threeDMakerUpdates?.openRelease()}>{appLanguage === 'de' ? 'Update herunterladen' : 'Download update'}</button></div>}{updateInfo?.message && <p className="creator-hint">{updateInfo.message}</p>}<button disabled={updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? (appLanguage === 'de' ? 'Prüfe ...' : 'Checking ...') : (appLanguage === 'de' ? 'Jetzt nach Updates suchen' : 'Check for updates')}</button>{window.threeDMakerUpdates && <div className="update-token"><p className="creator-hint">{appLanguage === 'de' ? 'Privates Repository: Ein Fine-Grained GitHub-Token mit Leserecht für Contents (nur dieses Repository) wird benötigt. Das Token wird verschlüsselt auf diesem PC gespeichert.' : 'Private repository: a fine-grained GitHub token with read-only Contents access is required. It is encrypted on this computer.'}</p><label>{tokenPresent ? 'GitHub Token ✓' : 'GitHub Token'}<input type="password" autoComplete="off" placeholder={appLanguage === 'de' ? 'Token einfügen' : 'Enter token'} value={githubToken} onChange={e => setGithubToken(e.target.value)} /></label><div className="property-actions"><button disabled={!githubToken.trim()} onClick={() => void saveGithubToken()}>{appLanguage === 'de' ? 'Token speichern' : 'Save token'}</button><button disabled={!tokenPresent} onClick={() => void window.threeDMakerUpdates?.setToken('').then(() => { setTokenPresent(false); setUpdateMessage('Token entfernt.'); void checkForUpdates(); })}>{appLanguage === 'de' ? 'Token entfernen' : 'Remove token'}</button></div>{updateMessage && <p className="creator-hint">{updateMessage}</p>}</div>}</section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
 
     {creatorMode && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setCreatorMode(null); }}><section className="settings-dialog creator-dialog" role="dialog" aria-modal="true" aria-labelledby="creator-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · PARAMETRISCHE FORM</span><h2 id="creator-title">{creatorMode === 'text' ? '3D-Text erstellen' : creatorMode === 'gear' ? 'Zahnrad erstellen' : 'Gewinde erstellen'}</h2></div><button className="settings-close" onClick={() => setCreatorMode(null)} aria-label="Schließen">×</button></header><div className="settings-content">
       {creatorMode === 'text' && <><label className="creator-field">Text<input autoFocus maxLength={100} value={textValue} onChange={e => setTextValue(e.target.value)} placeholder="Dein Text" /></label><label className="creator-field">Buchstabenhöhe (mm)<input type="number" min="2" max="200" step="1" value={textSize} onChange={e => setTextSize(Number(e.target.value))} /></label><label className="creator-field">Extrusionstiefe (mm)<input type="number" min="0.5" max="100" step="0.5" value={textDepth} onChange={e => setTextDepth(Number(e.target.value))} /></label><p className="creator-hint">Erzeugt echte extrudierte 3D-Geometrie, keine Textur.</p></>}
@@ -1054,7 +1089,7 @@ export default function App() {
       <div className="top-divider" />
       <label className="project-label">{t("project")} <input value={projectName} onChange={e => setProjectName(e.target.value)} aria-label="Projektname" /></label>
       <div className="top-actions">
-        <button className="settings-trigger" onClick={() => setSettingsOpen(true)} title={t("settings")}>⚙ <span>{t("settings")}</span></button>
+        <button className="settings-trigger" onClick={() => setSettingsOpen(true)} title={t("settings")}>⚙ <span>{t("settings")}{updateInfo?.status === "available" ? " · Update!" : ""}</span></button>
         <button onClick={undo} disabled={undoStackRef.current.length === 0} title="Rückgängig (Strg+Z)">{t("undo")}</button>
         <button onClick={redo} disabled={redoStackRef.current.length === 0} title="Wiederholen (Strg+R)">{t("redo")}</button>
         <button onClick={saveProject} title="Projekt speichern (Strg+S)">{t("save")}</button>
