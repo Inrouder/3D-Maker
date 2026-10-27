@@ -3,7 +3,7 @@
 **Ein lokaler 3D-Modellierer für Windows und den Browser.** Entwerfe und bearbeite 3D-Objekte in einer übersichtlichen Arbeitsfläche – ohne Benutzerkonto, Cloudzwang, Werbung oder Slicer.
 
 [![Build](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml/badge.svg)](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/Version-0.1.7-19b5a5)
+![Version](https://img.shields.io/badge/Version-0.1.8-19b5a5)
 ![Windows](https://img.shields.io/badge/Windows-Portable-2767bb)
 ![Status](https://img.shields.io/badge/Status-Experimentell-ef9d38)
 
@@ -26,6 +26,12 @@
 3. **Kombinieren:** Ein Werkstück und einen Schneidkörper auswählen, dann mit **H** den Ausschnitt durchführen.
 4. **Speichern:** Projekt lokal sichern oder Modelle als STL exportieren.
 
+## Design und Programm-Icon
+
+![3D-Maker Icon](public/icon.svg)
+
+Das neue 3D-Würfel-Icon wird als SVG im Browser und als mehrstufiges Windows-ICO in der portablen EXE verwendet. Die Icon-Dateien werden beim Windows-Build automatisch erzeugt (`npm run icon:generate`).
+
 ## Windows: portable EXE herunterladen
 
 **Empfohlener Einstieg:** [GitHub Releases](https://github.com/Inrouder/3D-Maker/releases/latest)
@@ -41,9 +47,9 @@ Wenn noch kein GitHub Release existiert: [Actions / Build 3DMaker](https://githu
 Die Windows-Version prüft beim Start sowie alle sechs Stunden auf neue **GitHub Releases**. Eine neue Version wird in den Einstellungen angezeigt, inklusive Versionsnummer und Versionshinweisen. Unter **Einstellungen → Programm-Updates** lässt sich die Prüfung auch manuell starten.
 
 - Updates werden **nicht** heimlich installiert: `Update herunterladen` öffnet die Release-Seite im Standardbrowser. Vor dem Wechsel die Arbeit speichern, alte EXE schließen und neue EXE starten.
-- **Privates Repository:** Zum Abfragen der Releases benötigt die Anwendung einen **Fine-grained Personal Access Token** mit `Contents: Read-only` für ausschließlich `Inrouder/3D-Maker`. Er kann in den Einstellungen hinterlegt und wieder entfernt werden. Auf unterstützten Windows-Systemen wird er mit Electron `safeStorage` verschlüsselt gespeichert. Gib diesem Token keine Schreibrechte.
+- **Öffentliches Repository:** Die Updateprüfung verwendet die öffentliche GitHub-Releases-API. Es ist **kein Login und kein Token** erforderlich. GitHub kann bei sehr häufigen Abfragen API-Limits anwenden.
 - Ohne erreichbaren Release oder GitHub-Zugriff erscheint eine klare Statusmeldung. Für die Browser-Version steht die Electron-Updatefunktion nicht zur Verfügung.
-- Die Versionsnummer eines Release-Tags (`v0.1.7` usw.) muss zur App-Version in `package.json` passen.
+- Die Versionsnummer eines Release-Tags (`v0.1.8` usw.) muss zur App-Version in `package.json` passen.
 
 ## Tastenkürzel
 
@@ -78,7 +84,7 @@ Portable Windows-EXE (unter Windows):
 npm run dist:portable
 ```
 
-Der GitHub-Actions-Workflow baut bei Änderungen am Standardbranch eine Web-Version und eine portable Windows-EXE. Wird ein Tag wie `v0.1.7` gepusht, erstellt der Workflow zusätzlich einen GitHub Release mit der EXE. **Die Release-Erstellung setzt die nötigen Actions-Schreibrechte voraus.** Ohne veröffentlichten Release kann die Updateprüfung keine neue Version melden.
+Der GitHub-Actions-Workflow baut bei Änderungen am Standardbranch eine Web-Version und eine portable Windows-EXE. Wird ein Tag wie `v0.1.8` gepusht, erstellt der Workflow zusätzlich einen GitHub Release mit der EXE. **Die Release-Erstellung setzt die nötigen Actions-Schreibrechte voraus.** Ohne veröffentlichten Release kann die Updateprüfung keine neue Version melden.
 
 ## Technologie
 
