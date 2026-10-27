@@ -1,65 +1,97 @@
-# 3DMaker
+# 3D-Maker
 
-**Ein kostenloser, lokaler 3D-Modellierer – ohne Werbung, Login, Cloud oder Druckerfunktionen.**
+**Ein lokaler 3D-Modellierer für Windows und den Browser.** Entwerfe und bearbeite 3D-Objekte in einer übersichtlichen Arbeitsfläche – ohne Benutzerkonto, Cloudzwang, Werbung oder Slicer.
 
-3DMaker ist eine unabhängige Neuentwicklung mit XYZmaker 1.2 als funktionaler Inspiration. Es wird kein proprietärer Code des ursprünglichen Programms verwendet.
+[![Build](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml/badge.svg)](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml)
+![Version](https://img.shields.io/badge/Version-0.1.7-19b5a5)
+![Windows](https://img.shields.io/badge/Windows-Portable-2767bb)
+![Status](https://img.shields.io/badge/Status-Experimentell-ef9d38)
 
-## Aktueller Stand
+> **Entwicklungsstatus:** 3D-Maker befindet sich in aktiver Entwicklung. Vor produktivem Einsatz, besonders bei Passungen, Gewinden oder sicherheitsrelevanten Teilen, Geometrien und exportierte STLs überprüfen.
 
-Der erste Entwicklungsstand enthält:
+## Auf einen Blick
 
-- Interaktive 3D-Ansicht mit Orbit, Zoom und Raster
-- Grundkörper: Quader, Zylinder, Kugel und Kegel
-- Objekt-Explorer und numerische Position, Drehung und Abmessungen in mm
-- Boolean-Operation **Ausschnitt / Cut**: Zielobjekt minus Schneidkörper
-- Tastenkürzel **H**
-- Lokales Projektformat `.3dmaker.json`
-- STL importieren und exportieren
-- Kein Login, keine Werbung, keine Telemetrie und keine externen Schrift- oder Cloud-Abhängigkeiten
+| Modellierung | Projekte & Dateien | Oberfläche |
+| --- | --- | --- |
+| Quader, Kugeln, Zylinder, Kegel | STL-/OBJ-Import | Interaktive 3D-Arbeitsfläche |
+| 3D-Text, Zahnräder, Gewinde | STL-Export | Objekt-Explorer |
+| Boolescher Ausschnitt (H) | Projektdateien als JSON | Hell-/Dunkelmodus |
+| Ebenenschnitt und Teilen | Lokale Speicherung | Deutsch / Englisch |
+| Gruppieren, Duplizieren | Rückgängig / Wiederholen | Präzise mm-Eingaben |
 
-> **Wichtig:** Dieses Projekt ist derzeit ein früher Prototyp. Vor der Verwendung für präzise oder sicherheitskritische Teile müssen Boolean-Ergebnisse, Einheiten, Mesh-Validierung und Export anhand von Testmodellen überprüft werden. Noch nicht implementierte Funktionen werden nicht als fertig dargestellt.
+### Typischer Ablauf
 
-## Ausschnitt / Cut (H)
+1. **Körper erstellen:** Quader, Zylinder oder eine parametrisierte Form einfügen.
+2. **Bearbeiten:** Mit den Griffen verschieben, drehen oder skalieren; numerische Maße in Millimetern festlegen.
+3. **Kombinieren:** Ein Werkstück und einen Schneidkörper auswählen, dann mit **H** den Ausschnitt durchführen.
+4. **Speichern:** Projekt lokal sichern oder Modelle als STL exportieren.
 
-1. Erstelle oder importiere das **Zielobjekt** (zum Beispiel einen Quader).
-2. Erstelle den **Schneidkörper** (zum Beispiel einen Zylinder mit 6 mm Durchmesser und 100 mm Länge).
-3. Positioniere den Schneidkörper so, dass er vollständig durch das Zielobjekt reicht.
-4. Wähle zuerst das Zielobjekt und danach mit **Umschalt-Klick** den Schneidkörper aus. Die Reihenfolge ist wichtig.
-5. Drücke **H** oder betätige „Ausschnitt / Cut“.
-6. Der Schneidkörper wird vom Zielobjekt abgezogen und anschließend aus der Szene entfernt.
+## Windows: portable EXE herunterladen
 
-Der Standard-Quader ist 40 × 12 × 40 mm groß. Ein neuer Zylinder ist 6 mm im Durchmesser und 100 mm lang und liegt zunächst zentriert, sodass er die 12 mm dicke Platte vollständig durchquert.
+**Empfohlener Einstieg:** [GitHub Releases](https://github.com/Inrouder/3D-Maker/releases/latest)
 
-## Starten (Entwicklung)
+1. Die neueste veröffentlichte Version öffnen.
+2. `3D-Maker-Portable-<version>.exe` herunterladen.
+3. Die EXE starten. Es ist keine klassische Installation und kein separates Node.js erforderlich.
 
-Voraussetzung: eine aktuelle Node.js-LTS-Version und npm.
+Wenn noch kein GitHub Release existiert: [Actions / Build 3DMaker](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml) öffnen, einen erfolgreichen Build auswählen und unter **Artifacts** `3DMaker-Portable-Windows-x64` laden. Artefakte sind zeitlich begrenzt und gelten nicht als veröffentlichte Updates.
+
+### Integrierte Updateprüfung
+
+Die Windows-Version prüft beim Start sowie alle sechs Stunden auf neue **GitHub Releases**. Eine neue Version wird in den Einstellungen angezeigt, inklusive Versionsnummer und Versionshinweisen. Unter **Einstellungen → Programm-Updates** lässt sich die Prüfung auch manuell starten.
+
+- Updates werden **nicht** heimlich installiert: `Update herunterladen` öffnet die Release-Seite im Standardbrowser. Vor dem Wechsel die Arbeit speichern, alte EXE schließen und neue EXE starten.
+- **Privates Repository:** Zum Abfragen der Releases benötigt die Anwendung einen **Fine-grained Personal Access Token** mit `Contents: Read-only` für ausschließlich `Inrouder/3D-Maker`. Er kann in den Einstellungen hinterlegt und wieder entfernt werden. Auf unterstützten Windows-Systemen wird er mit Electron `safeStorage` verschlüsselt gespeichert. Gib diesem Token keine Schreibrechte.
+- Ohne erreichbaren Release oder GitHub-Zugriff erscheint eine klare Statusmeldung. Für die Browser-Version steht die Electron-Updatefunktion nicht zur Verfügung.
+- Die Versionsnummer eines Release-Tags (`v0.1.7` usw.) muss zur App-Version in `package.json` passen.
+
+## Tastenkürzel
+
+| Kürzel | Aktion |
+| --- | --- |
+| `H` | Ausschnitt: zuerst Zielobjekt, dann Schneidkörper auswählen |
+| `C` | Schnittebene aktivieren/deaktivieren |
+| `Strg+S` | Projekt speichern |
+| `Entf` | Auswahl löschen |
+| `Esc` | Auswahl aufheben |
+| `Umschalt+Klick` | Mehrere Objekte auswählen |
+
+## Selbst bauen
+
+Node.js 22 und npm werden für die Entwicklung benötigt.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Für den Produktions-Build:
+Web-Produktionsversion:
 
 ```bash
 npm run build
 npm run preview
 ```
 
-## Tastenkürzel
+Portable Windows-EXE (unter Windows):
 
-| Taste | Funktion |
-| --- | --- |
-| `H` | Boolean-Ausschnitt (erstes ausgewähltes Objekt minus zweites) |
-| `Strg+S` | Projekt lokal als Datei speichern |
-| `Entf` | Ausgewählte Objekte löschen |
-| `Esc` | Auswahl aufheben |
-| `Umschalt+Klick` | Objekt zur Auswahl hinzufügen/entfernen |
+```bash
+npm run dist:portable
+```
 
-## Geplante Entwicklung
+Der GitHub-Actions-Workflow baut bei Änderungen am Standardbranch eine Web-Version und eine portable Windows-EXE. Wird ein Tag wie `v0.1.7` gepusht, erstellt der Workflow zusätzlich einen GitHub Release mit der EXE. **Die Release-Erstellung setzt die nötigen Actions-Schreibrechte voraus.** Ohne veröffentlichten Release kann die Updateprüfung keine neue Version melden.
 
-Siehe [docs/ROADMAP.md](docs/ROADMAP.md). Es gibt absichtlich **keine** Druckerprofile, keinen Slicer und keinen G-Code-Export. STL ist ausschließlich ein neutrales 3D-Austauschformat.
+## Technologie
 
-## Lizenz
+React 19 · TypeScript · Three.js · Vite · Electron · electron-builder · GitHub Actions.
 
-Lizenzentscheidung noch offen. Vor einer Veröffentlichung bitte Lizenz und Notices aller Abhängigkeiten prüfen und eine Projektlizenz ergänzen.
+3D-Maker speichert Projekte lokal und benötigt für die eigentliche Modellierung keine Netzwerkverbindung. Eine Verbindung zu GitHub wird ausschließlich für optionale Updateprüfungen oder das manuelle Öffnen des Repositorys verwendet.
+
+## Projekt & Mitwirkung
+
+- [Entwicklungsplan](docs/ROADMAP.md)
+- [Fehler melden / Vorschlag einreichen](https://github.com/Inrouder/3D-Maker/issues)
+- [Quellcode](https://github.com/Inrouder/3D-Maker)
+
+**Projekt:** Shad3pi · 3D-Maker. Eine eigenständige Entwicklung; XYZmaker diente als funktionale Inspiration. Es wird kein proprietärer Code des ursprünglichen Programms verwendet.
+
+**Lizenz:** Eine Projektlizenz ist noch nicht festgelegt. Öffentlich sichtbarer Quellcode ist nicht automatisch Open Source; vor externer Weiterverwendung die Lizenzfrage klären.
