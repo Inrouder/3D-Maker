@@ -3,6 +3,7 @@ name: Build 3DMaker
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -63,3 +64,22 @@ jobs:
           path: release/*.exe
           if-no-files-found: error
           retention-days: 30
+
+  publish-release:
+    name: Publish tagged Windows release
+    needs: build-portable-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download portable executable
+        uses: actions/download-artifact@v4
+        with:
+          name: 3DMaker-Portable-Windows-x64
+          path: portable/
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" portable/*.exe --repo "${GITHUB_REPOSITORY}" --title "3D-Maker ${GITHUB_REF_NAME}" --generate-notes
