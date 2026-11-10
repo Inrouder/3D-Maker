@@ -1147,8 +1147,8 @@ export default function App() {
           <label className="field-label">{t("color")}<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
           <VectorFields key={selected.id + 'position'} title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
           <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
-          <VectorFields title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
-          <VectorFields title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
+          <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
+          <VectorFields minimum={0.01} title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
           <div className="actual-dimensions"><span>LOKALE MAẞE INKL. SKALIERUNG</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
           <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>{t("noObject")}</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
@@ -1159,20 +1159,21 @@ export default function App() {
   </main>;
 }
 
-function NumericField({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+function NumericField({ value, onChange, minimum }: { value: number; minimum?: number; onChange: (value: number) => void }) {
   const [draft, setDraft] = useState(String(Number(value.toFixed(3))));
   useEffect(() => { setDraft(String(Number(value.toFixed(3)))); }, [value]);
   const commit = () => {
-    const next = draft.trim() === '' ? NaN : Number(draft);
+    const parsed = draft.trim() === '' ? NaN : Number(draft);
+    const next = Number.isFinite(parsed) && minimum !== undefined ? Math.max(minimum, parsed) : parsed;
     if (Number.isFinite(next)) onChange(next);
     setDraft(String(Number((Number.isFinite(next) ? next : value).toFixed(3))));
   };
-  return <input type="number" step="1" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => {
+  return <input type="number" min={minimum} step="1" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => {
     if (e.key === 'Enter') e.currentTarget.blur();
     if (e.key === 'Escape') { setDraft(String(Number(value.toFixed(3)))); e.stopPropagation(); }
   }} />;
 }
 
-function VectorFields({ title, labels, values, onChange }: { title: string; labels: string[]; values: number[]; onChange: (axis: number, value: number) => void }) {
-  return <div className="vector-fields"><div className="section-label">{title}</div><div className="vector-row">{labels.map((label, i) => <label key={label}><span>{label}</span><NumericField value={values[i]} onChange={v => onChange(i, v)} /></label>)}</div></div>;
+function VectorFields({ title, labels, values, onChange, minimum }: { minimum?: number; title: string; labels: string[]; values: number[]; onChange: (axis: number, value: number) => void }) {
+  return <div className="vector-fields"><div className="section-label">{title}</div><div className="vector-row">{labels.map((label, i) => <label key={label}><span>{label}</span><NumericField minimum={minimum} value={values[i]} onChange={v => onChange(i, v)} /></label>)}</div></div>;
 }

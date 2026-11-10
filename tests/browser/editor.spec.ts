@@ -64,3 +64,17 @@ test('invalid saved language falls back without crashing',async({page})=>{
   await expect(page.locator('canvas')).toBeVisible();
   await expect(page.getByRole('button',{name:'Einstellungen',exact:true})).toBeVisible();
 });
+
+test('numeric drafts accept decimals and restore empty values; dimensions clamp consistently',async({page})=>{
+  await page.goto('/');
+  await page.locator('.object-row').first().click();
+  const width=page.locator('.vector-fields').nth(2).locator('input').first();
+  await width.fill(''); await width.press('Enter');
+  await expect(width).toHaveValue('40');
+  await width.fill('-1'); await width.press('Enter');
+  await expect(width).toHaveValue('0.1');
+  await width.fill('-1'); await width.press('Enter');
+  await expect(width).toHaveValue('0.1');
+  await width.fill('12.75'); await width.press('Enter');
+  await expect(width).toHaveValue('12.75');
+});
