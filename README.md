@@ -94,6 +94,7 @@ React 19 · TypeScript · Three.js · Vite · Electron · electron-builder · Gi
 
 ## Projekt & Mitwirkung
 
+- [Fehlerprüfung, Korrekturen und Testanleitung (10.11.2026)](docs/BUG_AUDIT_2026-11-10.md)
 - [Entwicklungsplan](docs/ROADMAP.md)
 - [Fehler melden / Vorschlag einreichen](https://github.com/Inrouder/3D-Maker/issues)
 - [Quellcode](https://github.com/Inrouder/3D-Maker)
