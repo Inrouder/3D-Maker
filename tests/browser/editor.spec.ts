@@ -78,3 +78,60 @@ test('numeric drafts accept decimals and restore empty values; dimensions clamp 
   await width.fill('12.75'); await width.press('Enter');
   await expect(width).toHaveValue('12.75');
 });
+
+test('rotate imported mesh, change Z, export only selected object and repair it',async({page})=>{
+  const THREE=await import('three');
+  const {STLExporter}=await import('three/examples/jsm/exporters/STLExporter.js');
+  const {STLLoader}=await import('three/examples/jsm/loaders/STLLoader.js');
+  const mesh=new THREE.Mesh(new THREE.BoxGeometry(10,12,14));
+  const stl=new STLExporter().parse(mesh,{binary:true});
+  await page.goto('/');
+  await page.locator('input[type=file]').nth(1).setInputFiles({name:'Teil.stl',mimeType:'model/stl',buffer:Buffer.from(stl.buffer)});
+  await expect(page.locator('.object-row')).toHaveCount(2);
+  const fields=page.locator('.vector-fields');
+  await fields.nth(1).locator('input').first().fill('90');await fields.nth(1).locator('input').first().press('Enter');
+  await expect(fields.nth(2).locator('label').nth(2)).toContainText('Z');
+  await fields.nth(2).locator('input').nth(2).fill('27');await fields.nth(2).locator('input').nth(2).press('Enter');
+  await expect(fields.nth(2).locator('input').nth(2)).toHaveValue('27');
+  const downloading=page.waitForEvent('download');
+  await page.getByRole('button',{name:'Auswahl als STL',exact:true}).click();
+  const download=await downloading;
+  const stream=await download.createReadStream();const chunks:Buffer[]=[];for await(const chunk of stream!)chunks.push(chunk);
+  const buffer=Buffer.concat(chunks);
+  const geometry=new STLLoader().parse(buffer.buffer.slice(buffer.byteOffset,buffer.byteOffset+buffer.byteLength));geometry.computeBoundingBox();
+  const size=geometry.boundingBox!.getSize(new THREE.Vector3());expect(size.y).toBeCloseTo(27,3);expect(size.x).toBeCloseTo(10,3);
+  expect(geometry.getAttribute('position').count).toBe(36);
+  await page.getByRole('button',{name:'Mesh reparieren',exact:true}).click();
+  await expect(page.locator('.statusbar')).toContainText('Repariert:');
+  await expect(fields.nth(2).locator('input').nth(2)).toHaveValue('27');
+  mesh.geometry.dispose();geometry.dispose();
+});
+
+test('split halves can be exported independently',async({page})=>{
+  await page.goto('/');await page.locator('.object-row').first().click();
+  await page.getByRole('button',{name:/Objekt teilen/}).click();
+  await expect(page.locator('.object-row')).toHaveCount(2);
+  for(let i=0;i<2;i++) {
+    await page.locator('.object-row').nth(i).click();
+    const download=page.waitForEvent('download');await page.getByRole('button',{name:'Auswahl als STL',exact:true}).click();
+    expect((await download).suggestedFilename()).toContain(i===0?'Teil A':'Teil B');
+    await expect(page.locator('.statusbar')).toContainText('1 Objekt(e)');
+  }
+});
+
+test('large binary STL imports in background and remains editable',async({page})=>{
+  test.setTimeout(90000);
+  const THREE=await import('three');const {STLExporter}=await import('three/examples/jsm/exporters/STLExporter.js');
+  const mesh=new THREE.Mesh(new THREE.SphereGeometry(20,512,256));
+  const stl=new STLExporter().parse(mesh,{binary:true});
+  const started=Date.now();
+  await page.goto('/');
+  await page.locator('input[type=file]').nth(1).setInputFiles({name:'Large.stl',mimeType:'model/stl',buffer:Buffer.from(stl.buffer)});
+  await page.getByRole('button',{name:'Einstellungen',exact:true}).click();
+  await expect(page.getByRole('dialog')).toBeVisible();await page.keyboard.press('Escape');
+  await expect(page.locator('.object-row')).toHaveCount(2,{timeout:60000});
+  const z=page.locator('.vector-fields').nth(2).locator('input').nth(2);
+  await z.fill('50');await z.press('Enter');await expect(z).toHaveValue('50');
+  console.log(`Large STL: ${stl.byteLength} bytes, ${mesh.geometry.index!.count/3} triangles, import and edit ${Date.now()-started} ms`);
+  mesh.geometry.dispose();
+});

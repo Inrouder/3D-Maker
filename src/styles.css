@@ -77,3 +77,4 @@
 .properties{min-height:0}
 button:disabled{cursor:not-allowed}
 .tools-scroll .wide-tool.active{border-color:var(--teal);background:var(--teal2)}
+.selection-tools{display:grid;gap:6px;margin-top:15px}.selection-tools button{text-align:left}

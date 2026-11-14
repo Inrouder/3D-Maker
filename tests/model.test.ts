@@ -32,3 +32,25 @@ test('reject duplicate IDs and unsupported versions', () => {
   assert.throws(()=>validateProject(project([model(),model()])));
   assert.throws(()=>validateProject({...project([]),version:2}));
 });
+
+test('repair removes duplicate and degenerate faces and reports open edges', async()=>{
+  const {repairGeometry}=await import('../src/mesh-tools.ts');
+  const result=repairGeometry({positions:[0,0,0,1,0,0,0,1,0],indices:[0,1,2,2,1,0,0,0,1]});
+  assert.equal(result.removed,2);assert.equal(result.boundaryEdges,3);assert.equal(result.geometryData.indices.length,3);
+});
+test('repair keeps closed cube manifold and corrects inverted normals',async()=>{
+  const {repairGeometry}=await import('../src/mesh-tools.ts');
+  const geometry=new THREE.BoxGeometry(10,10,10).toNonIndexed();
+  const positions=Array.from(geometry.getAttribute('position').array);
+  const inverted=Array.from({length:positions.length/3},(_,i)=>i);
+  for(let i=0;i<inverted.length;i+=3)[inverted[i+1],inverted[i+2]]=[inverted[i+2],inverted[i+1]];
+  const result=repairGeometry({positions,indices:inverted});
+  assert.equal(result.boundaryEdges,0);assert.equal(result.nonManifoldEdges,0);
+  assert.equal(result.geometryData.indices.length,36);
+  let volume=0;
+  for(let i=0;i<result.geometryData.indices.length;i+=3){
+    const [a,b,c]=result.geometryData.indices.slice(i,i+3).map(id=>new THREE.Vector3(...result.geometryData.positions.slice(id*3,id*3+3) as [number,number,number]));
+    volume+=a.dot(b.cross(c))/6;
+  }
+  assert.ok(Math.abs(volume-1000)<.001);geometry.dispose();
+});

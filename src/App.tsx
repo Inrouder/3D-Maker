@@ -3,20 +3,18 @@ import type { DragEvent } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import helvetikerFont from 'three/examples/fonts/helvetiker_regular.typeface.json';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
 
 import { geometryFor, validateProject } from './model';
 import type { ModelObject, ShapeType } from './model';
 type CreatorMode = 'text' | 'gear' | 'thread';
 
-const APP_VERSION = '0.1.8';
+const APP_VERSION = '0.1.9';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
 declare global { interface Window { threeDMakerUpdates?: UpdateBridge } }
@@ -38,7 +36,7 @@ function downloadFile(name: string, content: BlobPart, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement('a');
   a.href = url; a.download = name; a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export default function App() {
@@ -93,7 +91,7 @@ export default function App() {
   const cutHandleRef = useRef<THREE.Object3D | null>(null);
   const dragRef = useRef<{ id: string; groupId?: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
-  const cloneObjects = (items: ModelObject[]) => JSON.parse(JSON.stringify(items)) as ModelObject[];
+  const cloneObjects = (items: ModelObject[]) => items.slice();
   const setObjects = (update: ModelObject[] | ((previous: ModelObject[]) => ModelObject[])) => {
     const next = typeof update === 'function' ? update(objectsRef.current) : update;
     if (historyReadyRef.current) {
@@ -346,13 +344,7 @@ export default function App() {
     const group = meshGroupRef.current;
     if (!group) return;
     transformControlsRef.current?.detach();
-    group.traverse(child => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose();
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach(material => material.dispose());
-      }
-    });
+    const oldMeshes = new Map(meshMapRef.current);
     group.clear();
     meshMapRef.current.clear();
     visualGroupMapRef.current.clear();
@@ -365,14 +357,22 @@ export default function App() {
       pivot.position.copy(center); pivot.userData.groupId=groupId; group.add(pivot); pivots.set(groupId,pivot); visualGroupMapRef.current.set(groupId,pivot);
     }
     for (const obj of objects) {
-      const geometry = geometryFor(obj);
-      const material = new THREE.MeshStandardMaterial({
+      const previous = oldMeshes.get(obj.id);
+      const previousModel = previous?.userData.model as ModelObject | undefined;
+      const sameGeometry = previousModel && previousModel.type === obj.type && previousModel.geometryData === obj.geometryData && previousModel.dimensions.every((v,i)=>v===obj.dimensions[i]);
+      const geometry = sameGeometry ? previous!.geometry : geometryFor(obj);
+      if (previous && !sameGeometry) previous.geometry.dispose();
+      const material = previous ? previous.material as THREE.MeshStandardMaterial : new THREE.MeshStandardMaterial({
         color: obj.color, roughness: 0.58, metalness: 0.04,
         side: THREE.DoubleSide,
         emissive: selectedIds.includes(obj.id) ? new THREE.Color('#0b514b') : new THREE.Color('#000000'),
         emissiveIntensity: selectedIds.includes(obj.id) ? 0.65 : 0
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      material.color.set(obj.color);
+      const mesh = previous ?? new THREE.Mesh(geometry, material);
+      mesh.geometry = geometry;
+      mesh.userData = {model:obj};
+      oldMeshes.delete(obj.id);
       const pivot = obj.groupId ? pivots.get(obj.groupId) : undefined;
       if (pivot) mesh.position.set(obj.position[0]-pivot.position.x,obj.position[1]-pivot.position.y,obj.position[2]-pivot.position.z); else mesh.position.set(...obj.position);
       mesh.rotation.set(...obj.rotation.map(v => THREE.MathUtils.degToRad(v)) as [number, number, number]);
@@ -380,7 +380,8 @@ export default function App() {
       if (pivot) mesh.userData.groupId=obj.groupId;
       mesh.castShadow = true; mesh.receiveShadow = true; (pivot ?? group).add(mesh); meshMapRef.current.set(obj.id, mesh);
     }
-  }, [objects, selectedIds]);
+    for (const mesh of oldMeshes.values()) { mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose(); }
+  }, [objects]);
 
   useEffect(() => {
     const gizmo = transformControlsRef.current;
@@ -593,9 +594,12 @@ export default function App() {
   };
   const updateVector = (key: 'position' | 'rotation' | 'scale' | 'dimensions', axis: number, value: number) => {
     if (!selected || !Number.isFinite(value)) return;
-    const vector = [...selected[key]] as [number, number, number];
-    vector[axis] = value;
-    updateSelected({ [key]: vector } as Partial<ModelObject>);
+    const id = selected.id;
+    setObjects(previous => previous.map(obj => {
+      if(obj.id !== id)return obj;
+      const vector = [...obj[key]] as [number,number,number]; vector[axis]=value;
+      return {...obj,[key]:vector};
+    }));
   };
 
   const subtract = useCallback(() => {
@@ -862,7 +866,7 @@ export default function App() {
         const data = { positions: Array.from(geometry.getAttribute('position').array as ArrayLike<number>), indices: index?.array ? Array.from(index.array as ArrayLike<number>) : null };
         geometry.dispose();
         if (data.positions.length < 9) return null;
-        return { ...original, id: makeId(), name: original.name + suffix, type: 'custom', position: halfCenter.toArray() as [number, number, number], rotation: [0, 0, 0], scale: [1, 1, 1], dimensions: [halfSize.x, halfSize.y, halfSize.z], geometryData: data, groupId: original.groupId };
+        return { ...original, id: makeId(), name: original.name + suffix, type: 'custom', position: halfCenter.toArray() as [number, number, number], rotation: [0, 0, 0], scale: [1, 1, 1], dimensions: [halfSize.x, halfSize.y, halfSize.z], geometryData: data, groupId: undefined };
       };
       const halves = [makeHalf(negative, ' – Teil A'), makeHalf(positive, ' – Teil B')].filter((o): o is ModelObject => o !== null);
       indexedGeometry.dispose();
@@ -928,63 +932,23 @@ export default function App() {
     };
     reader.readAsText(file);
   };
-  const importMesh = (file?: File) => {
-    if (!file) return;
-    const extension = file.name.split('.').pop()?.toLowerCase();
-    const finishImport = (sourceGeometry: THREE.BufferGeometry) => {
-      sourceGeometry.computeBoundingBox();
-      const bounds = sourceGeometry.boundingBox;
-      if (!bounds) throw new Error('Keine gültigen Mesh-Abmessungen gefunden.');
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      bounds.getSize(size);
-      bounds.getCenter(center);
-      sourceGeometry.translate(-center.x, -center.y, -center.z);
-      sourceGeometry.computeVertexNormals();
-      sourceGeometry.computeBoundingBox();
-      sourceGeometry.computeBoundingSphere();
-      const positions = Array.from(sourceGeometry.getAttribute('position').array as ArrayLike<number>);
-      const index = sourceGeometry.getIndex();
-      const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
-      const obj: ModelObject = {
-        id: makeId(), name: file.name.replace(/\.(stl|obj)$/i, ''), type: 'custom',
-        position: [center.x, center.y, center.z], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8',
-        dimensions: [size.x, size.y, size.z], geometryData: { positions, indices }
-      };
-      setObjects(prev => [...prev, obj]); setSelectedIds([obj.id]); setStatus(extension?.toUpperCase() + '-Modell importiert.');
-    };
-    if (extension === 'stl') {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try { finishImport(new STLLoader().parse(reader.result as ArrayBuffer)); }
-        catch (error) { setStatus('STL-Import fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Dateifehler')); }
-      };
-      reader.readAsArrayBuffer(file);
-    } else if (extension === 'obj') {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const root = new OBJLoader().parse(String(reader.result));
-          root.updateMatrixWorld(true);
-          const parts: THREE.BufferGeometry[] = [];
-          root.traverse(child => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const geometry = child.geometry.clone();
-            geometry.applyMatrix4(child.matrixWorld);
-            if (!geometry.getAttribute('position')) return;
-            parts.push(geometry);
-          });
-          if (!parts.length) throw new Error('Die OBJ-Datei enthält keine Mesh-Geometrie.');
-          const merged = mergeGeometries(parts, false);
-          parts.forEach(g => g.dispose());
-          if (!merged) throw new Error('Die OBJ-Teile konnten nicht zusammengefügt werden.');
-          finishImport(merged);
-        } catch (error) { setStatus('OBJ-Import fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Dateifehler')); }
-      };
-      reader.readAsText(file);
-    } else {
-      setStatus('Bitte eine STL-, OBJ- oder .3dmaker.json-Datei verwenden.');
-    }
+  const importMesh = async (file?: File) => {
+    if (!file || busy) return;
+    const extension=file.name.split('.').pop()?.toLowerCase();
+    if(extension!=='stl' && extension!=='obj'){setStatus('Bitte eine STL- oder OBJ-Datei verwenden.');return;}
+    setBusy(true);setStatus(`${file.name} wird im Hintergrund importiert …`);
+    const worker=new Worker(new URL('./import.worker.ts',import.meta.url),{type:'module'});
+    try {
+      const buffer=await file.arrayBuffer();
+      const result=await new Promise<Pick<ModelObject,'position'|'dimensions'|'geometryData'>>((resolve,reject)=>{
+        worker.onmessage=event=>event.data.error?reject(new Error(event.data.error)):resolve(event.data.result);
+        worker.onerror=()=>reject(new Error('Import-Worker konnte nicht ausgeführt werden.'));
+        worker.postMessage({extension,buffer},[buffer]);
+      });
+      const obj:ModelObject={...result,id:makeId(),name:file.name.replace(/\.(stl|obj)$/i,''),type:'custom',rotation:[0,0,0],scale:[1,1,1],color:'#43b6a8'};
+      setObjects(previous=>[...previous,obj]);setSelectedIds([obj.id]);setStatus(`${extension.toUpperCase()} importiert · ${Math.round((obj.geometryData?.indices?.length ?? (obj.geometryData?.positions.length ?? 0)/3)/3).toLocaleString()} Dreiecke.`);
+    }catch(error){setStatus('Import fehlgeschlagen: '+(error instanceof Error?error.message:'Dateifehler'));}
+    finally{worker.terminate();setBusy(false);}
   };
   const handleDroppedFiles = (files: FileList | File[]) => {
     const file = Array.from(files)[0];
@@ -1002,13 +966,44 @@ export default function App() {
     event.preventDefault();
     handleDroppedFiles(event.dataTransfer.files);
   };
-  const exportStl = () => {
+  const repairSelected = async () => {
+    if(!selected || busy)return;
+    const original=selected;
+    setBusy(true);setStatus('Mesh wird im Hintergrund repariert …');
+    const geometry=geometryFor(original);
+    const data={positions:Array.from(geometry.getAttribute('position').array),indices:geometry.index?Array.from(geometry.index.array):null};
+    geometry.dispose();
+    const worker=new Worker(new URL('./repair.worker.ts',import.meta.url),{type:'module'});
+    try {
+      const result = await new Promise<{geometryData:NonNullable<ModelObject['geometryData']>;removed:number;boundaryEdges:number;nonManifoldEdges:number}>((resolve,reject)=>{
+        worker.onmessage=event=>event.data.error?reject(new Error(event.data.error)):resolve(event.data.result);
+        worker.onerror=()=>reject(new Error('Reparatur-Worker konnte nicht ausgeführt werden.'));
+        worker.postMessage(data);
+      });
+      setObjects(previous=>previous.map(obj=>obj.id===original.id ? {...obj,type:'custom',geometryData:result.geometryData} : obj));
+      setStatus(`Repariert: ${result.removed} fehlerhafte/doppelte Dreiecke entfernt · ${result.boundaryEdges} offene Kanten · ${result.nonManifoldEdges} nicht-manifolde Kanten. Löcher werden nicht automatisch gefüllt.`);
+    } catch(error) {setStatus(error instanceof Error?error.message:'Reparatur fehlgeschlagen.');}
+    finally {worker.terminate();setBusy(false);}
+  };
+
+  const exportStl = (selectionOnly = false) => {
     const group = meshGroupRef.current;
     if (!group || objects.length === 0) { setStatus('Keine Geometrie zum Exportieren.'); return; }
     group.updateMatrixWorld(true);
-    const text = new STLExporter().parse(group, { binary: false });
-    downloadFile('3dmaker-export.stl', text, 'model/stl');
-    setStatus('STL exportiert.');
+    const exportGroup = new THREE.Group();
+    const ids = selectionOnly ? selectedIds : objects.map(obj=>obj.id);
+    if(!ids.length) { setStatus('Bitte ein Objekt für den Export auswählen.'); return; }
+    for(const id of ids) {
+      const source=meshMapRef.current.get(id);if(!source)continue;
+      source.updateWorldMatrix(true,false);
+      const mesh=new THREE.Mesh(source.geometry);
+      mesh.matrix.copy(source.matrixWorld);mesh.matrixAutoUpdate=false;exportGroup.add(mesh);
+    }
+    exportGroup.updateMatrixWorld(true);
+    const binary = new STLExporter().parse(exportGroup, { binary: true });
+    const name=selectionOnly && ids.length===1 ? objects.find(o=>o.id===ids[0])?.name ?? 'Objekt' : selectionOnly ? 'Auswahl' : '3dmaker-export';
+    downloadFile(`${name.replace(/[^a-z0-9äöüß _-]/gi,'_')}.stl`, binary.buffer as ArrayBuffer, 'model/stl');
+    setStatus(`${ids.length} Objekt(e) als binäre STL exportiert.`);
   };
   const placeOnGround = () => {
     if (!selected) { setStatus('Bitte zuerst ein Objekt auswählen.'); return; }
@@ -1058,7 +1053,7 @@ export default function App() {
         <button onClick={saveProject} title="Projekt speichern (Strg+S)">{t("save")}</button>
         <label className="button secondary">{t("open")}<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
         <label className="button secondary">{t("importMesh")}<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
-        <button className="primary" onClick={exportStl}>{t("export")}</button>
+        <button className="primary" onClick={() => exportStl()}>{t("export")}</button>
       </div>
     </header>
 
@@ -1131,10 +1126,10 @@ export default function App() {
 
       <aside className="right-panel">
         <div className="panel-heading"><span>{t("explorer")}</span><span className="object-count">{objects.length}</span></div>
-        <div className="object-list">
+        <div className="object-list" title="Klick: Objekt/Gruppe · Umschalt-Klick: Auswahl ergänzen · Alt-Klick: einzelnes Gruppenmitglied">
           {objects.map((obj, index) => <button key={obj.id} className={`object-row ${selectedIds.includes(obj.id) ? 'selected' : ''}`} onClick={e => {
             if (e.shiftKey) setSelectedIds(prev => prev.includes(obj.id) ? prev.filter(id => id !== obj.id) : [...prev, obj.id]);
-            else if (obj.groupId) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
+            else if (obj.groupId && !e.altKey) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
             else setSelectedIds([obj.id]);
           }}>
             <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId && <span className="group-mark" title={`Gruppenmitglied · ${obj.groupId}`}>GRUPPE</span>}{obj.name}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
@@ -1142,15 +1137,18 @@ export default function App() {
           {objects.length === 0 && <div className="empty-list">Noch keine Objekte vorhanden.</div>}
         </div>
         <div className="properties-heading"><span>{t("properties")}</span>{selected && <span className="property-type">{selected.type.toUpperCase()}</span>}</div>
-        {selected ? <div className="properties">
+        {selected ? <div className="properties" key={selected.id}>
           <label className="field-label">{t("name")}<input value={selected.name} onChange={e => updateSelected({ name: e.target.value })} /></label>
           <label className="field-label">{t("color")}<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
           <VectorFields key={selected.id + 'position'} title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
           <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
-          <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
+          <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['X', 'Y', 'Z']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
           <VectorFields minimum={0.01} title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
           <div className="actual-dimensions"><span>LOKALE MAẞE INKL. SKALIERUNG</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
-          <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
+          <div className="selection-tools"><button disabled={busy || selectedIds.length !== 1} onClick={repairSelected} title="Doppelte/degenerierte Flächen entfernen und Normalen ausrichten; Löcher werden gemeldet">Mesh reparieren</button><button onClick={()=>exportStl(true)}>Auswahl als STL</button><button onClick={()=>{
+            const selectedObjects=objects.filter(o=>selectedIds.includes(o.id)).map(o=>({...o,groupId:undefined}));
+            downloadFile('Auswahl.3dmaker.json',JSON.stringify({format:'3dmaker-project',version:1,name:'Auswahl',objects:selectedObjects}), 'application/json');
+          }}>Auswahl als Projekt</button></div><div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>{t("noObject")}</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
         <div className="right-footer"><span>3DMAKER</span><span>v{APP_VERSION} · EXPERIMENTELL</span></div>
