@@ -16,22 +16,17 @@ jobs:
     name: Build browser version
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Install dependencies
-        run: npm install
-
+        run: npm ci
+      - name: Test geometry and desktop integration
+        run: npm test
       - name: Build application
         run: npm run build
-
-      - name: Package browser version
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: 3DMaker-web-build
           path: dist/
@@ -43,43 +38,70 @@ jobs:
     runs-on: windows-latest
     if: github.event_name != 'pull_request'
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Install dependencies
-        run: npm install
-
+        run: npm ci
+      - name: Test desktop integration on Windows
+        run: npm test
       - name: Build portable application
         run: npm run dist:portable
-
-      - name: Upload portable EXE
-        uses: actions/upload-artifact@v4
+      - name: Smoke-test packaged Windows app and file associations
+        run: node tests/windows-smoke.mjs
+      - name: Prepare stable filename and checksums
+        shell: pwsh
+        run: |
+          Copy-Item release/3D-Maker-Portable-*.exe release/3D-Maker-Portable.exe
+          Get-ChildItem release/*.exe | Sort-Object Name | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding ascii release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
         with:
           name: 3DMaker-Portable-Windows-x64
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
 
   publish-release:
-    name: Publish tagged Windows release
-    needs: build-portable-windows
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish current version
+    needs: [build-web, build-portable-windows]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish-3dmaker
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
-      - name: Download portable executable
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           name: 3DMaker-Portable-Windows-x64
           path: portable/
-      - name: Create GitHub Release
+      - name: Publish immutable version with permanent latest download
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          gh release create "${GITHUB_REF_NAME}" portable/*.exe --repo "${GITHUB_REPOSITORY}" --title "3D-Maker ${GITHUB_REF_NAME}" --generate-notes
+          version=$(node -p 'require("./package.json").version')
+          tag="v${version}"
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF_NAME}" != "${tag}" ]]; then
+            echo 'Tag and package.json version differ.' >&2
+            exit 1
+          fi
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "${tag} is already published; existing releases are not overwritten. Bump package.json for a new build."
+            exit 0
+          fi
+          test -s "portable/3D-Maker-Portable-${version}.exe"
+          test -s portable/3D-Maker-Portable.exe
+          sed -i 's/\r$//' portable/SHA256SUMS.txt
+          (cd portable && sha256sum --check SHA256SUMS.txt)
+          latest_flag=--latest
+          latest_tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [[ -n "${latest_tag}" ]] && ! node -e 'const {newer}=require("./electron/desktop.cjs"); process.exit(newer(process.argv[1],process.argv[2])?0:1)' "${version}" "${latest_tag}"; then
+            latest_flag=--latest=false
+          fi
+          gh release create "${tag}" portable/*.exe portable/SHA256SUMS.txt --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --title "3D-Maker ${version}" --generate-notes "${latest_flag}"

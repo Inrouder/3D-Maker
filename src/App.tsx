@@ -3,34 +3,25 @@ import type { DragEvent } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
 import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
 import helvetikerFont from 'three/examples/fonts/helvetiker_regular.typeface.json';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
 
-type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom' | 'text' | 'gear' | 'thread';
+import { geometryFor, validateProject } from './model';
+import type { ModelObject, ShapeType } from './model';
 type CreatorMode = 'text' | 'gear' | 'thread';
-type ModelObject = {
-  id: string;
-  name: string;
-  type: ShapeType;
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-  color: string;
-  dimensions: [number, number, number];
-  geometryData?: { positions: number[]; indices: number[] | null };
-  groupId?: string;
-};
 
-const APP_VERSION = '0.1.8';
+const APP_VERSION = '0.1.11';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
-declare global { interface Window { threeDMakerUpdates?: UpdateBridge } }
+type FileBridge = {
+  isWindows:boolean; pick:()=>Promise<void>; take:()=>Promise<{name?:string;data?:Uint8Array;error?:string}|null>;
+  register:()=>Promise<{message:string;executable:string}>; defaults:()=>Promise<void>; onPending:(callback:()=>void)=>()=>void;
+};
+declare global { interface Window { threeDMakerUpdates?: UpdateBridge; threeDMakerFiles?: FileBridge } }
 type AppLanguage = 'de' | 'en';
 type AppTheme = 'dark' | 'light';
 const uiText: Record<AppLanguage, Record<string, string>> = {
@@ -44,44 +35,12 @@ const initialObject = (): ModelObject => ({
   rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8', dimensions: [40, 12, 40]
 });
 
-function geometryFor(obj: ModelObject): THREE.BufferGeometry {
-  if (obj.geometryData) {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(obj.geometryData.positions, 3));
-    if (obj.geometryData.indices) g.setIndex(obj.geometryData.indices);
-    g.computeBoundingBox();
-    const bounds = g.boundingBox;
-    if (bounds) {
-      const size = new THREE.Vector3();
-      bounds.getSize(size);
-      g.scale(
-        size.x > 1e-6 ? obj.dimensions[0] / size.x : 1,
-        size.y > 1e-6 ? obj.dimensions[1] / size.y : 1,
-        size.z > 1e-6 ? obj.dimensions[2] / size.z : 1
-      );
-    }
-    g.computeVertexNormals();
-    g.computeBoundingBox();
-    g.computeBoundingSphere();
-    return g;
-  }
-  const [x, y, z] = obj.dimensions;
-  let g: THREE.BufferGeometry;
-  switch (obj.type) {
-    case 'cylinder': g = new THREE.CylinderGeometry(x / 2, x / 2, y, 64); break;
-    case 'sphere': g = new THREE.SphereGeometry(x / 2, 48, 32); break;
-    case 'cone': g = new THREE.ConeGeometry(x / 2, y, 64); break;
-    default: g = new THREE.BoxGeometry(x, y, z);
-  }
-  g.computeVertexNormals();
-  return g;
-}
 
 function downloadFile(name: string, content: BlobPart, type: string) {
   const url = URL.createObjectURL(new Blob([content], { type }));
   const a = document.createElement('a');
   a.href = url; a.download = name; a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export default function App() {
@@ -96,11 +55,29 @@ export default function App() {
   const redoStackRef = useRef<ModelObject[][]>([]);
   const historyReadyRef = useRef(false);
   const [historyVersion, setHistoryVersion] = useState(0);
-  const [appTheme, setAppTheme] = useState<AppTheme>(() => (localStorage.getItem('3dmaker-theme') as AppTheme) || 'dark');
-  const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => (localStorage.getItem('3dmaker-language') as AppLanguage) || 'de');
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => localStorage.getItem('3dmaker-theme') === 'light' ? 'light' : 'dark');
+  const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => localStorage.getItem('3dmaker-language') === 'en' ? 'en' : 'de');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [fileSettingsMessage, setFileSettingsMessage] = useState('');
+  const [fileSettingsBusy, setFileSettingsBusy] = useState(false);
+  const desktopAction = async (action:'register'|'defaults'|'pick') => {
+    const files=window.threeDMakerFiles;if(!files)return;
+    setFileSettingsBusy(true);
+    try {
+      if(action==='register')setFileSettingsMessage((await files.register()).message);
+      else if(action==='defaults')await files.defaults();
+      else {await files.pick();setSettingsOpen(false);}
+    }catch(error){setFileSettingsMessage(error instanceof Error?error.message:'Aktion fehlgeschlagen.');}
+    finally{setFileSettingsBusy(false);}
+  };
+  const downloadUpdate=async()=>{
+    setUpdateBusy(true);
+    try {await window.threeDMakerUpdates?.openRelease();}
+    catch(error){setUpdateInfo(previous=>({...previous,status:previous?.status??'error',message:error instanceof Error?error.message:'Download konnte nicht geöffnet werden.'}));}
+    finally{setUpdateBusy(false);}
+  };
   const checkForUpdates = useCallback(async () => {
     const updater = window.threeDMakerUpdates;
     if (!updater) { setUpdateInfo({ status: 'unavailable', message: 'Updateprüfung ist nur in der Windows-Desktop-App verfügbar.' }); return; }
@@ -136,7 +113,9 @@ export default function App() {
   const cutHandleRef = useRef<THREE.Object3D | null>(null);
   const dragRef = useRef<{ id: string; groupId?: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
-  const cloneObjects = (items: ModelObject[]) => JSON.parse(JSON.stringify(items)) as ModelObject[];
+  const clipboardRef = useRef<{ objects: ModelObject[]; cut: boolean; pastes: number } | null>(null);
+  const [clipboardReady, setClipboardReady] = useState(false);
+  const cloneObjects = (items: ModelObject[]) => items.slice();
   const setObjects = (update: ModelObject[] | ((previous: ModelObject[]) => ModelObject[])) => {
     const next = typeof update === 'function' ? update(objectsRef.current) : update;
     if (historyReadyRef.current) {
@@ -370,6 +349,13 @@ export default function App() {
       controls.dispose();
       transformControls.dispose();
       transformControlsRef.current = null;
+      scene.traverse(child => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
+          child.geometry.dispose();
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach(material => material.dispose());
+        }
+      });
       renderer.dispose();
       host.removeChild(renderer.domElement);
       meshMapRef.current.clear();
@@ -381,6 +367,8 @@ export default function App() {
   useEffect(() => {
     const group = meshGroupRef.current;
     if (!group) return;
+    transformControlsRef.current?.detach();
+    const oldMeshes = new Map(meshMapRef.current);
     group.clear();
     meshMapRef.current.clear();
     visualGroupMapRef.current.clear();
@@ -393,14 +381,22 @@ export default function App() {
       pivot.position.copy(center); pivot.userData.groupId=groupId; group.add(pivot); pivots.set(groupId,pivot); visualGroupMapRef.current.set(groupId,pivot);
     }
     for (const obj of objects) {
-      const geometry = geometryFor(obj);
-      const material = new THREE.MeshStandardMaterial({
+      const previous = oldMeshes.get(obj.id);
+      const previousModel = previous?.userData.model as ModelObject | undefined;
+      const sameGeometry = previousModel && previousModel.type === obj.type && previousModel.geometryData === obj.geometryData && previousModel.dimensions.every((v,i)=>v===obj.dimensions[i]);
+      const geometry = sameGeometry ? previous!.geometry : geometryFor(obj);
+      if (previous && !sameGeometry) previous.geometry.dispose();
+      const material = previous ? previous.material as THREE.MeshStandardMaterial : new THREE.MeshStandardMaterial({
         color: obj.color, roughness: 0.58, metalness: 0.04,
         side: THREE.DoubleSide,
         emissive: selectedIds.includes(obj.id) ? new THREE.Color('#0b514b') : new THREE.Color('#000000'),
         emissiveIntensity: selectedIds.includes(obj.id) ? 0.65 : 0
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      material.color.set(obj.color);
+      const mesh = previous ?? new THREE.Mesh(geometry, material);
+      mesh.geometry = geometry;
+      mesh.userData = {model:obj};
+      oldMeshes.delete(obj.id);
       const pivot = obj.groupId ? pivots.get(obj.groupId) : undefined;
       if (pivot) mesh.position.set(obj.position[0]-pivot.position.x,obj.position[1]-pivot.position.y,obj.position[2]-pivot.position.z); else mesh.position.set(...obj.position);
       mesh.rotation.set(...obj.rotation.map(v => THREE.MathUtils.degToRad(v)) as [number, number, number]);
@@ -408,6 +404,10 @@ export default function App() {
       if (pivot) mesh.userData.groupId=obj.groupId;
       mesh.castShadow = true; mesh.receiveShadow = true; (pivot ?? group).add(mesh); meshMapRef.current.set(obj.id, mesh);
     }
+    for (const mesh of oldMeshes.values()) { mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose(); }
+  }, [objects]);
+
+  useEffect(() => {
     const gizmo = transformControlsRef.current;
     const selectedObjects = objects.filter(obj=>selectedIds.includes(obj.id));
     const groupedSelection = selectedObjects.length > 1 && selectedObjects.every(obj=>obj.groupId && obj.groupId===selectedObjects[0].groupId);
@@ -438,6 +438,7 @@ export default function App() {
           } else gizmo.detach();
         } else gizmo.detach();
       } else {
+        gizmo.setSpace('local');
         gizmo.showX = true; gizmo.showY = true; gizmo.showZ = true;
         if (groupedSelection) { const pivot=visualGroupMapRef.current.get(selectedObjects[0].groupId!); if(pivot){gizmo.attach(pivot);gizmo.setMode(transformMode);}else gizmo.detach(); }
         else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
@@ -461,7 +462,7 @@ export default function App() {
     return ()=>{if(cutPreviewRef.current===line){scene.remove(line);line.geometry.dispose();(line.material as THREE.Material).dispose();cutPreviewRef.current=null;}};
   }, [cutMode,cutAxis,cutPosition,selectedIds,objects]);
 
-  useEffect(() => { setLiveTransform(null); }, [selectedIds[0]]);
+  useEffect(() => { setLiveTransform(null); }, [selectedIds[0], objects]);
 
   useEffect(() => {
     for (const [id, mesh] of meshMapRef.current) {
@@ -617,9 +618,12 @@ export default function App() {
   };
   const updateVector = (key: 'position' | 'rotation' | 'scale' | 'dimensions', axis: number, value: number) => {
     if (!selected || !Number.isFinite(value)) return;
-    const vector = [...selected[key]] as [number, number, number];
-    vector[axis] = value;
-    updateSelected({ [key]: vector } as Partial<ModelObject>);
+    const id = selected.id;
+    setObjects(previous => previous.map(obj => {
+      if(obj.id !== id)return obj;
+      const vector = [...obj[key]] as [number,number,number]; vector[axis]=value;
+      return {...obj,[key]:vector};
+    }));
   };
 
   const subtract = useCallback(() => {
@@ -886,7 +890,7 @@ export default function App() {
         const data = { positions: Array.from(geometry.getAttribute('position').array as ArrayLike<number>), indices: index?.array ? Array.from(index.array as ArrayLike<number>) : null };
         geometry.dispose();
         if (data.positions.length < 9) return null;
-        return { ...original, id: makeId(), name: original.name + suffix, type: 'custom', position: halfCenter.toArray() as [number, number, number], rotation: [0, 0, 0], scale: [1, 1, 1], dimensions: [halfSize.x, halfSize.y, halfSize.z], geometryData: data, groupId: original.groupId };
+        return { ...original, id: makeId(), name: original.name + suffix, type: 'custom', position: halfCenter.toArray() as [number, number, number], rotation: [0, 0, 0], scale: [1, 1, 1], dimensions: [halfSize.x, halfSize.y, halfSize.z], geometryData: data, groupId: undefined };
       };
       const halves = [makeHalf(negative, ' – Teil A'), makeHalf(positive, ' – Teil B')].filter((o): o is ModelObject => o !== null);
       indexedGeometry.dispose();
@@ -906,12 +910,59 @@ export default function App() {
     }
   }, [selectedIds, cutAxis, cutPosition]);
 
+  const copySelection = (cut = false) => {
+    if (busy) return;
+    const items = objectsRef.current.filter(obj => selectedIds.includes(obj.id));
+    if (!items.length) { setStatus('Bitte zuerst Objekte auswählen.'); return; }
+    // Model data is immutable: keep a snapshot without duplicating large mesh arrays.
+    clipboardRef.current = { objects: items.slice(), cut, pastes: 0 };
+    setClipboardReady(true);
+    if (cut) {
+      setObjects(previous => previous.filter(obj => !selectedIds.includes(obj.id)));
+      setSelectedIds([]);
+    }
+    setStatus(`${items.length} Objekt(e) ${cut ? 'ausgeschnitten' : 'kopiert'} · Strg+V zum Einfügen.`);
+  };
+  const pasteSelection = () => {
+    if (busy) return;
+    const clipboard = clipboardRef.current;
+    if (!clipboard) { setStatus('Die Objekt-Zwischenablage ist leer.'); return; }
+    const offset = (clipboard.cut ? clipboard.pastes : clipboard.pastes + 1) * 10;
+    const groups = new Map<string, string>();
+    const groupCounts = new Map<string, number>();
+    for (const obj of clipboard.objects) if (obj.groupId) groupCounts.set(obj.groupId, (groupCounts.get(obj.groupId) ?? 0) + 1);
+    const pasted = clipboard.objects.map(obj => {
+      let groupId: string | undefined;
+      if (obj.groupId && (groupCounts.get(obj.groupId) ?? 0) > 1) {
+        if (!groups.has(obj.groupId)) groups.set(obj.groupId, makeId());
+        groupId = groups.get(obj.groupId);
+      }
+      return { ...obj, id: makeId(), groupId, name: clipboard.cut && clipboard.pastes === 0 ? obj.name : `${obj.name} Kopie`,
+        position: [obj.position[0] + offset, obj.position[1], obj.position[2] + offset] as [number, number, number] };
+    });
+    clipboard.pastes++;
+    setObjects(previous => [...previous, ...pasted]);
+    setSelectedIds(pasted.map(obj => obj.id));
+    setStatus(`${pasted.length} Objekt(e) eingefügt.`);
+  };
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(); return; }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r') { event.preventDefault(); redo(); return; }
+      if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+      if (settingsOpen || creatorMode) {
+        if (event.key === 'Escape') { setSettingsOpen(false); setCreatorMode(null); }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && ['c', 'x', 'v'].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        if (event.repeat) return;
+        if (event.key.toLowerCase() === 'v') pasteSelection();
+        else copySelection(event.key.toLowerCase() === 'x');
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return; }
+      if ((event.ctrlKey || event.metaKey) && ['r', 'y'].includes(event.key.toLowerCase())) { event.preventDefault(); redo(); return; }
       if (event.key.toLowerCase() === 'h' && !event.altKey) { event.preventDefault(); subtract(); }
       if (event.altKey && event.key.toLowerCase() === 'c') { event.preventDefault(); cutAtPlane(); return; }
       if (event.key.toLowerCase() === 'c' && !event.ctrlKey && !event.metaKey && !event.altKey) {
@@ -925,94 +976,98 @@ export default function App() {
       }
       if (event.key === 'Escape') setSelectedIds([]);
     };
+    // Electron's native Edit menu can dispatch clipboard events instead of keydown.
+    const onClipboard = (event: ClipboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (['INPUT','TEXTAREA','SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+      if (settingsOpen || creatorMode || busy) return;
+      event.preventDefault();
+      if (event.type === 'paste') pasteSelection();
+      else copySelection(event.type === 'cut');
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [subtract, cutAtPlane, selectedIds, historyVersion]);
+    window.addEventListener('copy', onClipboard);
+    window.addEventListener('cut', onClipboard);
+    window.addEventListener('paste', onClipboard);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('copy', onClipboard);
+      window.removeEventListener('cut', onClipboard);
+      window.removeEventListener('paste', onClipboard);
+    };
+  }, [subtract, cutAtPlane, selectedIds, historyVersion, projectName, settingsOpen, creatorMode, busy]);
 
   const saveProject = () => {
     const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
-    downloadFile(`${projectName.replace(/[^a-z0-9-_ ]/gi, '_')}.3dmaker.json`, JSON.stringify(project, null, 2), 'application/json');
+    downloadFile(`${projectName.replace(/[^a-z0-9-_ ]/gi, '_')}.3dmaker`, JSON.stringify(project, null, 2), 'application/json');
     setStatus('Projekt lokal exportiert.');
   };
-  const openProject = (file?: File) => {
+  const openProject = async (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(String(reader.result));
-        if (data.format !== '3dmaker-project' || !Array.isArray(data.objects)) throw new Error('Keine gültige 3DMaker-Projektdatei.');
-        setObjects(data.objects);
-        setProjectName(typeof data.name === 'string' ? data.name : 'Importiertes Projekt');
-        setSelectedIds([]);
-        setStatus('Projekt geöffnet.');
-      } catch (e) { setStatus(e instanceof Error ? e.message : 'Projekt konnte nicht geöffnet werden.'); }
-    };
-    reader.readAsText(file);
+    try {
+      const data=validateProject(JSON.parse(await file.text()));
+      if(undoStackRef.current.length && !window.confirm('Projekt öffnen und die aktuelle Arbeitsfläche ersetzen? Ungespeicherte Arbeit vorher speichern.'))return;
+      setObjects(data.objects);setProjectName(data.name??'Importiertes Projekt');setSelectedIds([]);setStatus('Projekt geöffnet.');
+    }catch(error){setStatus(error instanceof Error?error.message:'Projekt konnte nicht geöffnet werden.');}
   };
-  const importMesh = (file?: File) => {
-    if (!file) return;
-    const extension = file.name.split('.').pop()?.toLowerCase();
-    const finishImport = (sourceGeometry: THREE.BufferGeometry) => {
-      sourceGeometry.computeBoundingBox();
-      const bounds = sourceGeometry.boundingBox;
-      if (!bounds) throw new Error('Keine gültigen Mesh-Abmessungen gefunden.');
-      const size = new THREE.Vector3();
-      const center = new THREE.Vector3();
-      bounds.getSize(size);
-      bounds.getCenter(center);
-      sourceGeometry.translate(-center.x, -center.y, -center.z);
-      sourceGeometry.computeVertexNormals();
-      sourceGeometry.computeBoundingBox();
-      sourceGeometry.computeBoundingSphere();
-      const positions = Array.from(sourceGeometry.getAttribute('position').array as ArrayLike<number>);
-      const index = sourceGeometry.getIndex();
-      const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
-      const obj: ModelObject = {
-        id: makeId(), name: file.name.replace(/\.(stl|obj)$/i, ''), type: 'custom',
-        position: [center.x, center.y, center.z], rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8',
-        dimensions: [size.x, size.y, size.z], geometryData: { positions, indices }
-      };
-      setObjects(prev => [...prev, obj]); setSelectedIds([obj.id]); setStatus(extension?.toUpperCase() + '-Modell importiert.');
-    };
-    if (extension === 'stl') {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try { finishImport(new STLLoader().parse(reader.result as ArrayBuffer)); }
-        catch (error) { setStatus('STL-Import fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Dateifehler')); }
-      };
-      reader.readAsArrayBuffer(file);
-    } else if (extension === 'obj') {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const root = new OBJLoader().parse(String(reader.result));
-          root.updateMatrixWorld(true);
-          const parts: THREE.BufferGeometry[] = [];
-          root.traverse(child => {
-            if (!(child instanceof THREE.Mesh)) return;
-            const geometry = child.geometry.clone();
-            geometry.applyMatrix4(child.matrixWorld);
-            if (!geometry.getAttribute('position')) return;
-            parts.push(geometry);
-          });
-          if (!parts.length) throw new Error('Die OBJ-Datei enthält keine Mesh-Geometrie.');
-          const merged = mergeGeometries(parts, false);
-          parts.forEach(g => g.dispose());
-          if (!merged) throw new Error('Die OBJ-Teile konnten nicht zusammengefügt werden.');
-          finishImport(merged);
-        } catch (error) { setStatus('OBJ-Import fehlgeschlagen: ' + (error instanceof Error ? error.message : 'Dateifehler')); }
-      };
-      reader.readAsText(file);
-    } else {
-      setStatus('Bitte eine STL-, OBJ- oder .3dmaker.json-Datei verwenden.');
+  const importMesh = async (file?: File, queued = false) => {
+    if (!file || (busy && !queued)) return;
+    const extension=file.name.split('.').pop()?.toLowerCase();
+    if(extension!=='stl' && extension!=='obj'){setStatus('Bitte eine STL- oder OBJ-Datei verwenden.');return;}
+    setBusy(true);setStatus(`${file.name} wird im Hintergrund importiert …`);
+    const worker=new Worker(new URL('./import.worker.ts',import.meta.url),{type:'module'});
+    try {
+      const buffer=await file.arrayBuffer();
+      const result=await new Promise<Pick<ModelObject,'position'|'dimensions'|'geometryData'>>((resolve,reject)=>{
+        worker.onmessage=event=>event.data.error?reject(new Error(event.data.error)):resolve(event.data.result);
+        worker.onerror=()=>reject(new Error('Import-Worker konnte nicht ausgeführt werden.'));
+        worker.postMessage({extension,buffer},[buffer]);
+      });
+      const obj:ModelObject={...result,id:makeId(),name:file.name.replace(/\.(stl|obj)$/i,''),type:'custom',rotation:[0,0,0],scale:[1,1,1],color:'#43b6a8'};
+      setObjects(previous=>[...previous,obj]);setSelectedIds([obj.id]);setStatus(`${extension.toUpperCase()} importiert · ${Math.round((obj.geometryData?.indices?.length ?? (obj.geometryData?.positions.length ?? 0)/3)/3).toLocaleString()} Dreiecke.`);
+    }catch(error){setStatus('Import fehlgeschlagen: '+(error instanceof Error?error.message:'Dateifehler'));}
+    finally{worker.terminate();setBusy(false);}
+  };
+  const externalBusyRef = useRef(false);
+  externalBusyRef.current=busy;
+  const externalDrainState=useRef({running:false,wake:false});
+  const externalFileHandler = useRef<(file:File)=>Promise<void>>(async()=>{});
+  externalFileHandler.current=async(file)=>{
+    while(externalBusyRef.current)await new Promise(resolve=>window.setTimeout(resolve,50));
+    if(/\.(stl|obj)$/i.test(file.name)){
+      if(!undoStackRef.current.length)setObjects([]);
+      await importMesh(file,true);
     }
+    else await openProject(file);
   };
+  useEffect(()=>{
+    const bridge=window.threeDMakerFiles;if(!bridge)return;
+    const state=externalDrainState.current;
+    const drain=async()=>{
+      state.wake=true;if(state.running)return;
+      state.running=true;
+      try {
+        while(state.wake){
+          state.wake=false;
+          let item;
+          while((item=await bridge.take())){
+            if(item.error){setStatus(item.error);continue;}
+            if(item.data && item.name)await externalFileHandler.current(new File([new Uint8Array(item.data).buffer],item.name));
+          }
+        }
+      }catch(error){setStatus(error instanceof Error?error.message:'Datei konnte nicht geöffnet werden.');}
+      finally{state.running=false;}
+    };
+    const unsubscribe=bridge.onPending(()=>{void drain();});void drain();
+    return()=>{unsubscribe();};
+  },[]);
+
   const handleDroppedFiles = (files: FileList | File[]) => {
     const file = Array.from(files)[0];
     if (!file) return;
     const extension = file.name.split('.').pop()?.toLowerCase();
     if (extension === 'stl' || extension === 'obj') importMesh(file);
-    else if (extension === 'json' || file.name.toLowerCase().endsWith('.3dmaker.json')) openProject(file);
+    else if (extension === '3dmaker' || extension === 'json' || file.name.toLowerCase().endsWith('.3dmaker.json')) openProject(file);
     else setStatus('Dateiformat nicht unterstützt. Erlaubt: STL, OBJ und 3DMaker-Projekte.');
   };
   const onDragOver = (event: DragEvent<HTMLDivElement>) => {
@@ -1023,13 +1078,44 @@ export default function App() {
     event.preventDefault();
     handleDroppedFiles(event.dataTransfer.files);
   };
-  const exportStl = () => {
+  const repairSelected = async () => {
+    if(!selected || busy)return;
+    const original=selected;
+    setBusy(true);setStatus('Mesh wird im Hintergrund repariert …');
+    const geometry=geometryFor(original);
+    const data={positions:Array.from(geometry.getAttribute('position').array),indices:geometry.index?Array.from(geometry.index.array):null};
+    geometry.dispose();
+    const worker=new Worker(new URL('./repair.worker.ts',import.meta.url),{type:'module'});
+    try {
+      const result = await new Promise<{geometryData:NonNullable<ModelObject['geometryData']>;removed:number;boundaryEdges:number;nonManifoldEdges:number}>((resolve,reject)=>{
+        worker.onmessage=event=>event.data.error?reject(new Error(event.data.error)):resolve(event.data.result);
+        worker.onerror=()=>reject(new Error('Reparatur-Worker konnte nicht ausgeführt werden.'));
+        worker.postMessage(data);
+      });
+      setObjects(previous=>previous.map(obj=>obj.id===original.id ? {...obj,type:'custom',geometryData:result.geometryData} : obj));
+      setStatus(`Repariert: ${result.removed} fehlerhafte/doppelte Dreiecke entfernt · ${result.boundaryEdges} offene Kanten · ${result.nonManifoldEdges} nicht-manifolde Kanten. Löcher werden nicht automatisch gefüllt.`);
+    } catch(error) {setStatus(error instanceof Error?error.message:'Reparatur fehlgeschlagen.');}
+    finally {worker.terminate();setBusy(false);}
+  };
+
+  const exportStl = (selectionOnly = false) => {
     const group = meshGroupRef.current;
     if (!group || objects.length === 0) { setStatus('Keine Geometrie zum Exportieren.'); return; }
     group.updateMatrixWorld(true);
-    const text = new STLExporter().parse(group, { binary: false });
-    downloadFile('3dmaker-export.stl', text, 'model/stl');
-    setStatus('STL exportiert.');
+    const exportGroup = new THREE.Group();
+    const ids = selectionOnly ? selectedIds : objects.map(obj=>obj.id);
+    if(!ids.length) { setStatus('Bitte ein Objekt für den Export auswählen.'); return; }
+    for(const id of ids) {
+      const source=meshMapRef.current.get(id);if(!source)continue;
+      source.updateWorldMatrix(true,false);
+      const mesh=new THREE.Mesh(source.geometry);
+      mesh.matrix.copy(source.matrixWorld);mesh.matrixAutoUpdate=false;exportGroup.add(mesh);
+    }
+    exportGroup.updateMatrixWorld(true);
+    const binary = new STLExporter().parse(exportGroup, { binary: true });
+    const name=selectionOnly && ids.length===1 ? objects.find(o=>o.id===ids[0])?.name ?? 'Objekt' : selectionOnly ? 'Auswahl' : '3dmaker-export';
+    downloadFile(`${name.replace(/[^a-z0-9äöüß _-]/gi,'_')}.stl`, binary.buffer as ArrayBuffer, 'model/stl');
+    setStatus(`${ids.length} Objekt(e) als binäre STL exportiert.`);
   };
   const placeOnGround = () => {
     if (!selected) { setStatus('Bitte zuerst ein Objekt auswählen.'); return; }
@@ -1038,7 +1124,7 @@ export default function App() {
     mesh.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(mesh);
     if (bounds.isEmpty()) { setStatus('Für dieses Objekt konnten keine Abmessungen ermittelt werden.'); return; }
-    const nextY = mesh.position.y - bounds.min.y;
+    const nextY = selected.position[1] - bounds.min.y;
     updateSelected({ position: [selected.position[0], nextY, selected.position[2]] });
     setStatus('„' + selected.name + '“ auf den Boden gesetzt (Unterkante Y = 0).');
   };
@@ -1060,7 +1146,12 @@ export default function App() {
   };
 
   return <main className={`app-shell theme-${appTheme}`}>
-    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-updates"><h3>{appLanguage === 'de' ? 'Programm-Updates' : 'Software updates'}</h3><p className="creator-hint">{appLanguage === 'de' ? 'Automatische Prüfung beim Start und alle 6 Stunden. Ein Update wird angezeigt, aber nie ohne Zustimmung installiert.' : 'Automatic check on startup and every 6 hours. Updates are never installed without your consent.'}</p><div className="about-row"><span>{appLanguage === 'de' ? 'Installiert' : 'Installed'}</span><strong>v{APP_VERSION}</strong></div>{updateInfo && <div className="about-row"><span>{appLanguage === 'de' ? 'Update-Status' : 'Update status'}</span><strong>{updateInfo.status === 'available' ? (appLanguage === 'de' ? 'Neue Version verfügbar' : 'Update available') : updateInfo.status === 'current' ? (appLanguage === 'de' ? 'Aktuell' : 'Up to date') : updateInfo.status === 'error' ? 'Fehler' : (appLanguage === 'de' ? 'Nicht verfügbar' : 'Unavailable')}</strong></div>}{updateInfo?.status === 'available' && <div className="update-notice"><strong>3D-Maker {updateInfo.latestVersion}</strong><p>{updateInfo.notes?.slice(0, 800) || (appLanguage === 'de' ? 'Eine neue Version steht bereit.' : 'A new release is available.')}</p><button className="primary" onClick={() => void window.threeDMakerUpdates?.openRelease()}>{appLanguage === 'de' ? 'Update herunterladen' : 'Download update'}</button></div>}{updateInfo?.message && <p className="creator-hint">{updateInfo.message}</p>}<button disabled={updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? (appLanguage === 'de' ? 'Prüfe ...' : 'Checking ...') : (appLanguage === 'de' ? 'Jetzt nach Updates suchen' : 'Check for updates')}</button></section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
+    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-updates"><h3>{appLanguage === 'de' ? 'Programm-Updates' : 'Software updates'}</h3><p className="creator-hint">{appLanguage === 'de' ? 'Automatische Prüfung beim Start und alle 6 Stunden. Ein Update wird angezeigt, aber nie ohne Zustimmung installiert.' : 'Automatic check on startup and every 6 hours. Updates are never installed without your consent.'}</p><div className="about-row"><span>{appLanguage === 'de' ? 'Installiert' : 'Installed'}</span><strong>v{APP_VERSION}</strong></div>{updateInfo && <div className="about-row"><span>{appLanguage === 'de' ? 'Update-Status' : 'Update status'}</span><strong>{updateInfo.status === 'available' ? (appLanguage === 'de' ? 'Neue Version verfügbar' : 'Update available') : updateInfo.status === 'current' ? (appLanguage === 'de' ? 'Aktuell' : 'Up to date') : updateInfo.status === 'error' ? 'Fehler' : (appLanguage === 'de' ? 'Nicht verfügbar' : 'Unavailable')}</strong></div>}{updateInfo?.status === 'available' && <div className="update-notice"><strong>3D-Maker {updateInfo.latestVersion}</strong><p>{updateInfo.notes?.slice(0, 800) || (appLanguage === 'de' ? 'Eine neue Version steht bereit.' : 'A new release is available.')}</p><button className="primary" disabled={updateBusy} onClick={()=>void downloadUpdate()}>{appLanguage === 'de' ? 'Update herunterladen' : 'Download update'}</button></div>}{updateInfo?.message && <p className="creator-hint">{updateInfo.message}</p>}<button disabled={updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? (appLanguage === 'de' ? 'Prüfe ...' : 'Checking ...') : (appLanguage === 'de' ? 'Jetzt nach Updates suchen' : 'Check for updates')}</button></section><section className="settings-section settings-files"><h3>{appLanguage==='de'?'Dateien & Standardprogramm':'Files & default app'}</h3>
+      {window.threeDMakerFiles ? <button disabled={fileSettingsBusy || busy} onClick={()=>void desktopAction('pick')}>{appLanguage==='de'?'Datei öffnen …':'Open file …'}</button> : <label className="button">{appLanguage==='de'?'Datei öffnen …':'Open file …'}<input hidden type="file" accept=".3dmaker,.json,.stl,.obj" onChange={event=>{handleDroppedFiles(event.target.files??[]);setSettingsOpen(false);}} /></label>}
+      <p className="creator-hint">{appLanguage==='de'?'Projekte (.3dmaker) sowie STL- und OBJ-Dateien öffnen. Alte .3dmaker.json-Projekte bleiben lesbar.':'Open projects (.3dmaker), STL and OBJ. Legacy .3dmaker.json projects remain readable.'}</p>
+      {window.threeDMakerFiles?.isWindows ? <><p className="creator-hint">{appLanguage==='de'?'Die EXE zuerst an einem dauerhaften Ort ablegen. Danach Dateitypen registrieren und in Windows 3D-Maker als Standard auswählen. Nach Verschieben oder Ersetzen durch eine anders benannte EXE erneut registrieren.':'Keep the EXE in a permanent location, register file types, then choose 3D-Maker in Windows default apps. Register again after moving or renaming the EXE.'}</p><div className="selection-tools"><button disabled={fileSettingsBusy} onClick={()=>void desktopAction('register')}>{appLanguage==='de'?'Dateitypen registrieren':'Register file types'}</button><button disabled={fileSettingsBusy} onClick={()=>void desktopAction('defaults')}>{appLanguage==='de'?'Windows-Standardprogramme öffnen':'Open Windows default apps'}</button></div></> : <p className="creator-hint">{appLanguage==='de'?'Windows-Dateizuordnungen sind in der portablen Windows-App verfügbar.':'Windows file associations are available in the portable Windows app.'}</p>}
+      {fileSettingsMessage && <p role="status" className="creator-hint">{fileSettingsMessage}</p>}
+      </section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
 
     {creatorMode && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setCreatorMode(null); }}><section className="settings-dialog creator-dialog" role="dialog" aria-modal="true" aria-labelledby="creator-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · PARAMETRISCHE FORM</span><h2 id="creator-title">{creatorMode === 'text' ? '3D-Text erstellen' : creatorMode === 'gear' ? 'Zahnrad erstellen' : 'Gewinde erstellen'}</h2></div><button className="settings-close" onClick={() => setCreatorMode(null)} aria-label="Schließen">×</button></header><div className="settings-content">
       {creatorMode === 'text' && <><label className="creator-field">Text<input autoFocus maxLength={100} value={textValue} onChange={e => setTextValue(e.target.value)} placeholder="Dein Text" /></label><label className="creator-field">Buchstabenhöhe (mm)<input type="number" min="2" max="200" step="1" value={textSize} onChange={e => setTextSize(Number(e.target.value))} /></label><label className="creator-field">Extrusionstiefe (mm)<input type="number" min="0.5" max="100" step="0.5" value={textDepth} onChange={e => setTextDepth(Number(e.target.value))} /></label><p className="creator-hint">Erzeugt echte extrudierte 3D-Geometrie, keine Textur.</p></>}
@@ -1073,20 +1164,20 @@ export default function App() {
       <div className="top-divider" />
       <label className="project-label">{t("project")} <input value={projectName} onChange={e => setProjectName(e.target.value)} aria-label="Projektname" /></label>
       <div className="top-actions">
-        <button className="settings-trigger" onClick={() => setSettingsOpen(true)} title={t("settings")}>⚙ <span>{t("settings")}{updateInfo?.status === "available" ? " · Update!" : ""}</span></button>
+        <button className="settings-trigger" aria-label={t("settings")} onClick={() => setSettingsOpen(true)} title={t("settings")}>⚙ <span>{t("settings")}{updateInfo?.status === "available" ? " · Update!" : ""}</span></button>
         <button onClick={undo} disabled={undoStackRef.current.length === 0} title="Rückgängig (Strg+Z)">{t("undo")}</button>
         <button onClick={redo} disabled={redoStackRef.current.length === 0} title="Wiederholen (Strg+R)">{t("redo")}</button>
         <button onClick={saveProject} title="Projekt speichern (Strg+S)">{t("save")}</button>
-        <label className="button secondary">{t("open")}<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
+        <label className="button secondary">{t("open")}<input hidden type="file" accept=".3dmaker,.json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
         <label className="button secondary">{t("importMesh")}<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
-        <button className="primary" onClick={exportStl}>{t("export")}</button>
+        <button className="primary" onClick={() => exportStl()}>{t("export")}</button>
       </div>
     </header>
 
     <div className="workspace">
       <aside className="left-panel">
         <div className="panel-heading"><span>{t("tools")}</span><span className="tiny-dot" /></div>
-        <div className="tool-section">
+        <div className="tools-scroll" tabIndex={0} aria-label={t("tools")}><div className="tool-section">
           <div className="section-label">{t("basics")}</div>
           <div className="shape-grid">
             <button className="shape-button" onClick={() => addShape('box')}><span className="shape-icon cube-icon">▰</span><span>{t("box")}</span></button>
@@ -1098,12 +1189,19 @@ export default function App() {
             <button className="shape-button" onClick={() => setCreatorMode('thread')}><span className="shape-icon">⤿</span><span>Gewinde</span></button>
           </div>
         </div>
+        <div className="tool-section clipboard-tools">
+          <div className="section-label">{appLanguage === 'de' ? 'ZWISCHENABLAGE' : 'CLIPBOARD'}</div>
+          <button disabled={busy || !selectedIds.length} onClick={()=>copySelection()} title="Strg+C">{appLanguage === 'de' ? 'Kopieren' : 'Copy'} <kbd>Ctrl+C</kbd></button>
+          <button disabled={busy || !selectedIds.length} onClick={()=>copySelection(true)} title="Strg+X">{appLanguage === 'de' ? 'Ausschneiden' : 'Cut'} <kbd>Ctrl+X</kbd></button>
+          <button disabled={busy || !clipboardReady} onClick={pasteSelection} title="Strg+V">{appLanguage === 'de' ? 'Einfügen' : 'Paste'} <kbd>Ctrl+V</kbd></button>
+        </div>
         <div className="tool-section">
           <div className="section-label">{t("grouping")}</div>
           <button className="wide-tool" disabled={selectedIds.length < 2} onClick={() => {
             if (selectedIds.length < 2) return;
             const groupId = makeId();
-            setObjects(prev => prev.map(o => selectedIds.includes(o.id) ? { ...o, groupId } : o));
+            const previousGroups = new Set(objects.filter(o => selectedIds.includes(o.id)).map(o => o.groupId).filter(Boolean));
+            setObjects(prev => prev.map(o => selectedIds.includes(o.id) || (o.groupId && previousGroups.has(o.groupId)) ? { ...o, groupId } : o));
             setStatus(`${selectedIds.length} Objekte gruppiert und gemeinsam transformierbar.`);
           }}><span className="tool-glyph">▦</span><span><strong>{t("group")}</strong><small>Ausgewählte Objekte zusammenfassen</small></span></button>
           <button className="wide-tool" disabled={!selectedIds.some(id => objects.some(o => o.id === id && o.groupId))} onClick={() => {
@@ -1118,7 +1216,7 @@ export default function App() {
           <p className="hint">Erst das Werkstück wählen, dann mit Umschalt-Klick den Körper für das Loch.</p>
           <div className="section-label">{t("cutPlane")}</div>
           <button className={`wide-tool ${cutMode ? 'active' : ''}`} aria-pressed={cutMode} onClick={() => setCutMode(previous => { const next = !previous; setStatus(next ? 'Schnittmodus aktiv · Orange Linie zeigt die Schnittebene.' : 'Schnittmodus beendet.'); return next; })}><span className="cut-symbol">✂</span><span><strong>{cutMode ? t("cutOn") : t("cutOff")}</strong><small>Orange Schnittebene ein-/ausblenden</small></span><kbd>C</kbd></button>
-          <div className="vector-row">
+          <div className="cut-plane-fields">
             <label><span>Achse</span><select value={cutAxis} onChange={e => setCutAxis(e.target.value as 'x' | 'y' | 'z')}><option value="x">X</option><option value="y">Y</option><option value="z">Z</option></select></label>
             <label><span>Position (mm)</span><input type="number" step="1" value={cutPosition} onChange={e => setCutPosition(Number(e.target.value))} /></label>
           </div>
@@ -1129,6 +1227,7 @@ export default function App() {
           <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>{t("ground")}</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
           <button className="wide-tool" onClick={focusView}><span className="tool-glyph">⌖</span><span><strong>{t("frame")}</strong><small>Modelle im Blick zentrieren</small></span></button>
           <button className="wide-tool" onClick={() => { controlsRef.current?.reset(); }}><span className="tool-glyph">⟳</span><span><strong>{t("reset")}</strong><small>Kamera zurücksetzen</small></span></button>
+        </div>
         </div>
         <div className="left-footer"><span className="privacy-icon">◈</span><span><strong>{t("private")}</strong><small>{t("noLogin")}</small></span></div>
       </aside>
@@ -1141,7 +1240,7 @@ export default function App() {
         <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
           {selected && <div className="transform-readout"><strong>{transformMode === 'scale' ? 'SKALIERUNG LIVE' : transformMode === 'rotate' ? 'DREHUNG LIVE' : 'POSITION LIVE'}</strong>{transformMode === 'scale' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.dimensions[i] ?? selected.dimensions[i] * selected.scale[i]).toFixed(2)} mm</b> <em>{(liveTransform?.delta[i] ?? 0) >= 0 ? '+' : ''}{(liveTransform?.delta[i] ?? 0).toFixed(2)} mm</em></span>)}</div> : transformMode === 'rotate' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.rotation[i] ?? selected.rotation[i]).toFixed(1)}°</b></span>)}</div> : <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{selected.position[i].toFixed(2)} mm</b></span>)}</div>}</div>}
-          <div className="drop-hint">STL / OBJ / .3dmaker.json hier ablegen</div>
+          <div className="drop-hint">STL / OBJ / .3dmaker hier ablegen</div>
           <div className="axis-badge"><span className="axis-x">X</span><span className="axis-y">Y</span><span className="axis-z">Z</span></div>
           {objects.length === 0 && <div className="empty-viewport">Erstelle links deinen ersten Körper.</div>}
         </div>
@@ -1150,10 +1249,10 @@ export default function App() {
 
       <aside className="right-panel">
         <div className="panel-heading"><span>{t("explorer")}</span><span className="object-count">{objects.length}</span></div>
-        <div className="object-list">
+        <div className="object-list" title="Klick: Objekt/Gruppe · Umschalt-Klick: Auswahl ergänzen · Alt-Klick: einzelnes Gruppenmitglied">
           {objects.map((obj, index) => <button key={obj.id} className={`object-row ${selectedIds.includes(obj.id) ? 'selected' : ''}`} onClick={e => {
             if (e.shiftKey) setSelectedIds(prev => prev.includes(obj.id) ? prev.filter(id => id !== obj.id) : [...prev, obj.id]);
-            else if (obj.groupId) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
+            else if (obj.groupId && !e.altKey) setSelectedIds(objects.filter(item => item.groupId === obj.groupId).map(item => item.id));
             else setSelectedIds([obj.id]);
           }}>
             <span className="object-index">{String(index + 1).padStart(2, '0')}</span><span className="object-color" style={{ background: obj.color }} /><span className="object-name">{obj.groupId && <span className="group-mark" title={`Gruppenmitglied · ${obj.groupId}`}>GRUPPE</span>}{obj.name}</span>{selectedIds.includes(obj.id) && <span className="selected-mark">●</span>}
@@ -1161,15 +1260,18 @@ export default function App() {
           {objects.length === 0 && <div className="empty-list">Noch keine Objekte vorhanden.</div>}
         </div>
         <div className="properties-heading"><span>{t("properties")}</span>{selected && <span className="property-type">{selected.type.toUpperCase()}</span>}</div>
-        {selected ? <div className="properties">
+        {selected ? <div className="properties" key={selected.id}>
           <label className="field-label">{t("name")}<input value={selected.name} onChange={e => updateSelected({ name: e.target.value })} /></label>
           <label className="field-label">{t("color")}<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
-          <VectorFields title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
+          <VectorFields key={selected.id + 'position'} title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
           <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
-          <VectorFields title="ABMESSUNGEN MM · GRUNDMAẞ" labels={['B', 'H', 'T']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
-          <VectorFields title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
-          <div className="actual-dimensions"><span>AKTUELLE GESAMTMAẞE</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
-          <div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
+          <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['X', 'Y', 'Z']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
+          <VectorFields minimum={0.01} title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
+          <div className="actual-dimensions"><span>LOKALE MAẞE INKL. SKALIERUNG</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
+          <div className="selection-tools"><button disabled={busy || selectedIds.length !== 1} onClick={repairSelected} title="Doppelte/degenerierte Flächen entfernen und Normalen ausrichten; Löcher werden gemeldet">Mesh reparieren</button><button onClick={()=>exportStl(true)}>Auswahl als STL</button><button onClick={()=>{
+            const selectedObjects=objects.filter(o=>selectedIds.includes(o.id)).map(o=>({...o,groupId:undefined}));
+            downloadFile('Auswahl.3dmaker',JSON.stringify({format:'3dmaker-project',version:1,name:'Auswahl',objects:selectedObjects}), 'application/json');
+          }}>Auswahl als Projekt</button></div><div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>{t("noObject")}</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
         <div className="right-footer"><span>3DMAKER</span><span>v{APP_VERSION} · EXPERIMENTELL</span></div>
@@ -1178,6 +1280,21 @@ export default function App() {
   </main>;
 }
 
-function VectorFields({ title, labels, values, onChange }: { title: string; labels: string[]; values: number[]; onChange: (axis: number, value: number) => void }) {
-  return <div className="vector-fields"><div className="section-label">{title}</div><div className="vector-row">{labels.map((label, i) => <label key={label}><span>{label}</span><input type="number" step="1" value={Number(values[i].toFixed(3))} onChange={e => onChange(i, Number(e.target.value))} /></label>)}</div></div>;
+function NumericField({ value, onChange, minimum }: { value: number; minimum?: number; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState(String(Number(value.toFixed(3))));
+  useEffect(() => { setDraft(String(Number(value.toFixed(3)))); }, [value]);
+  const commit = () => {
+    const parsed = draft.trim() === '' ? NaN : Number(draft);
+    const next = Number.isFinite(parsed) && minimum !== undefined ? Math.max(minimum, parsed) : parsed;
+    if (Number.isFinite(next)) onChange(next);
+    setDraft(String(Number((Number.isFinite(next) ? next : value).toFixed(3))));
+  };
+  return <input type="number" min={minimum} step="1" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => {
+    if (e.key === 'Enter') e.currentTarget.blur();
+    if (e.key === 'Escape') { setDraft(String(Number(value.toFixed(3)))); e.stopPropagation(); }
+  }} />;
+}
+
+function VectorFields({ title, labels, values, onChange, minimum }: { minimum?: number; title: string; labels: string[]; values: number[]; onChange: (axis: number, value: number) => void }) {
+  return <div className="vector-fields"><div className="section-label">{title}</div><div className="vector-row">{labels.map((label, i) => <label key={label}><span>{label}</span><NumericField minimum={minimum} value={values[i]} onChange={v => onChange(i, v)} /></label>)}</div></div>;
 }
