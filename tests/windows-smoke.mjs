@@ -73,7 +73,24 @@ try {
   await page.locator('.hole-list button').first().click();
   await page.getByRole('button',{name:'Verschluss übernehmen',exact:true}).click({timeout:60000});
   await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Markierte Öffnung geschlossen'));
-  console.log('PASS: packaged Windows renderer, startup project, registry launcher, second-instance project, STL import, repair and selective hole-fill workers.');
+  const shape=new THREE.Shape();shape.absarc(0,0,40,0,Math.PI*2,false);const hole=new THREE.Path();hole.absarc(0,0,20,0,Math.PI*2,true);shape.holes.push(hole);
+  const ringGeometry=new THREE.ExtrudeGeometry(shape,{depth:4,bevelEnabled:false,curveSegments:24});ringGeometry.translate(0,0,-2);
+  const ringStl=new STLExporter().parse(new THREE.Mesh(ringGeometry),{binary:true});ringGeometry.dispose();
+  const ringFile=path.join(temp,'thick-ring.stl');await writeFile(ringFile,Buffer.from(ringStl.buffer));await sendFile(ringFile);
+  await page.waitForFunction(()=>document.querySelectorAll('.object-row').length===3);
+  await page.getByRole('button',{name:'Armloch / Durchgang schließen',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.solid-tool [role=status]')?.textContent?.includes('Bereit.'),null,{timeout:60000});
+  await page.getByRole('button',{name:'Werkzeug einklappen',exact:true}).click();
+  const rect=await page.locator('canvas').boundingBox(),camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.position.set(110,100,150);camera.lookAt(0,0,0);camera.updateMatrixWorld();
+  const screen=Array.from({length:32},(_,i)=>{const angle=i*Math.PI*2/32,p=new THREE.Vector3(Math.cos(angle)*27,Math.sin(angle)*27,2).project(camera);return [rect.x+(p.x+1)*rect.width/2,rect.y+(1-p.y)*rect.height/2];});
+  await page.mouse.move(...screen[0]);await page.mouse.down();for(const p of [...screen.slice(1),screen[0]])await page.mouse.move(...p,{steps:2});await page.mouse.up();
+  await page.getByRole('button',{name:'Werkzeug ausklappen',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.solid-tool [role=status]')?.textContent?.includes('Markierung übernommen'),null,{timeout:60000});
+  await page.getByRole('button',{name:'Vorschau berechnen',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.solid-tool [role=status]')?.textContent?.includes('Gültige Vereinigung'),null,{timeout:60000});
+  await page.getByRole('button',{name:'Verschluss übernehmen',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Markierter Durchgang'));
+  console.log('PASS: packaged Windows renderer, file handling, repair, boundary filling and thick passage union with offline WASM worker.');
 }catch(error){
   console.error('SMOKE FAILURE',error);
   if(page){

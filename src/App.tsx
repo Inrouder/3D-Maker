@@ -13,9 +13,10 @@ import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh
 import { geometryFor, validateProject } from './model';
 import type { ModelObject, ShapeType } from './model';
 import HoleTool from './HoleTool';
+import SolidPatchTool from './SolidPatchTool';
 type CreatorMode = 'text' | 'gear' | 'thread';
 
-const APP_VERSION = '0.1.12';
+const APP_VERSION = '0.1.13';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
 type FileBridge = {
@@ -153,6 +154,8 @@ export default function App() {
   const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
   const [cutPosition, setCutPosition] = useState(0);
   const [cutMode, setCutMode] = useState(false);
+  const [solidObjectId,setSolidObjectId]=useState<string|null>(null);
+  useEffect(()=>{if(selectedIds.length!==1 || selectedIds[0]!==solidObjectId)setSolidObjectId(null);},[selectedIds,solidObjectId]);
   const [holeObjectId,setHoleObjectId]=useState<string|null>(null);
   useEffect(()=>{if(selectedIds.length!==1 || selectedIds[0]!==holeObjectId)setHoleObjectId(null);},[selectedIds,holeObjectId]);
   const [status, setStatus] = useState('Bereit · Maße in mm');
@@ -416,7 +419,7 @@ export default function App() {
     const groupedSelection = selectedObjects.length > 1 && selectedObjects.every(obj=>obj.groupId && obj.groupId===selectedObjects[0].groupId);
     const activeMesh = selectedObjects.length===1 ? (selectedObjects[0].groupId ? visualGroupMapRef.current.get(selectedObjects[0].groupId!) : meshMapRef.current.get(selectedObjects[0].id)) : undefined;
     if (gizmo) {
-      if(holeObjectId){gizmo.detach();return;}
+      if(holeObjectId || solidObjectId){gizmo.detach();return;}
       if (cutMode) {
         const handle = cutHandleRef.current;
         if (handle && selectedObjects.length === 1) {
@@ -448,7 +451,7 @@ export default function App() {
         else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
       }
     }
-  }, [objects, selectedIds, transformMode, cutMode, cutAxis, cutPosition,holeObjectId]);
+  }, [objects, selectedIds, transformMode, cutMode, cutAxis, cutPosition,holeObjectId,solidObjectId]);
 
   useEffect(() => {
     const scene=sceneRef.current; if(!scene)return;
@@ -958,7 +961,7 @@ export default function App() {
         if (event.key === 'Escape') { setSettingsOpen(false); setCreatorMode(null); }
         return;
       }
-      if(holeObjectId){if(event.key==='Escape'){event.preventDefault();setHoleObjectId(null);}return;}
+      if(holeObjectId || solidObjectId){if(event.key==='Escape'){event.preventDefault();setHoleObjectId(null);setSolidObjectId(null);}return;}
       if ((event.ctrlKey || event.metaKey) && !event.altKey && ['c', 'x', 'v'].includes(event.key.toLowerCase())) {
         event.preventDefault();
         if (event.repeat) return;
@@ -985,7 +988,7 @@ export default function App() {
     const onClipboard = (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (['INPUT','TEXTAREA','SELECT'].includes(target.tagName) || target.isContentEditable)) return;
-      if (settingsOpen || creatorMode || busy || holeObjectId) return;
+      if (settingsOpen || creatorMode || busy || holeObjectId || solidObjectId) return;
       event.preventDefault();
       if (event.type === 'paste') pasteSelection();
       else copySelection(event.type === 'cut');
@@ -1000,7 +1003,7 @@ export default function App() {
       window.removeEventListener('cut', onClipboard);
       window.removeEventListener('paste', onClipboard);
     };
-  }, [subtract, cutAtPlane, selectedIds, historyVersion, projectName, settingsOpen, creatorMode, busy,holeObjectId]);
+  }, [subtract, cutAtPlane, selectedIds, historyVersion, projectName, settingsOpen, creatorMode, busy,holeObjectId,solidObjectId]);
 
   const saveProject = () => {
     const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
@@ -1244,11 +1247,15 @@ export default function App() {
         </div>
         <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
-          {selected && !holeObjectId && <div className="transform-readout"><strong>{transformMode === 'scale' ? 'SKALIERUNG LIVE' : transformMode === 'rotate' ? 'DREHUNG LIVE' : 'POSITION LIVE'}</strong>{transformMode === 'scale' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.dimensions[i] ?? selected.dimensions[i] * selected.scale[i]).toFixed(2)} mm</b> <em>{(liveTransform?.delta[i] ?? 0) >= 0 ? '+' : ''}{(liveTransform?.delta[i] ?? 0).toFixed(2)} mm</em></span>)}</div> : transformMode === 'rotate' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.rotation[i] ?? selected.rotation[i]).toFixed(1)}°</b></span>)}</div> : <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{selected.position[i].toFixed(2)} mm</b></span>)}</div>}</div>}
-          {selected && selected.id===holeObjectId && sceneRef.current && cameraRef.current && controlsRef.current && meshMapRef.current.get(selected.id) && <HoleTool object={selected} scene={sceneRef.current} camera={cameraRef.current} controls={controlsRef.current} mesh={meshMapRef.current.get(selected.id)!} onClose={()=>setHoleObjectId(null)} onApply={(geometryData,dimensions)=>{
+          {selected && !holeObjectId && !solidObjectId && <div className="transform-readout"><strong>{transformMode === 'scale' ? 'SKALIERUNG LIVE' : transformMode === 'rotate' ? 'DREHUNG LIVE' : 'POSITION LIVE'}</strong>{transformMode === 'scale' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.dimensions[i] ?? selected.dimensions[i] * selected.scale[i]).toFixed(2)} mm</b> <em>{(liveTransform?.delta[i] ?? 0) >= 0 ? '+' : ''}{(liveTransform?.delta[i] ?? 0).toFixed(2)} mm</em></span>)}</div> : transformMode === 'rotate' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.rotation[i] ?? selected.rotation[i]).toFixed(1)}°</b></span>)}</div> : <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{selected.position[i].toFixed(2)} mm</b></span>)}</div>}</div>}
+          {selected && selected.id===holeObjectId && sceneRef.current && cameraRef.current && controlsRef.current && meshMapRef.current.get(selected.id) && <HoleTool onSolidMode={()=>{setHoleObjectId(null);setSolidObjectId(selected.id);}} object={selected} scene={sceneRef.current} camera={cameraRef.current} controls={controlsRef.current} mesh={meshMapRef.current.get(selected.id)!} onClose={()=>setHoleObjectId(null)} onApply={(geometryData,dimensions)=>{
             const id=selected.id;
             setObjects(previous=>previous.map(obj=>obj.id===id?{...obj,type:'custom',geometryData,dimensions:dimensions as [number,number,number]}:obj));
             setHoleObjectId(null);setStatus('Markierte Öffnung geschlossen. Andere Öffnungen bleiben unverändert. Strg+Z macht die Änderung rückgängig.');
+          }} />}
+          {selected && selected.id===solidObjectId && sceneRef.current && cameraRef.current && controlsRef.current && meshMapRef.current.get(selected.id) && <SolidPatchTool object={selected} scene={sceneRef.current} camera={cameraRef.current} controls={controlsRef.current} mesh={meshMapRef.current.get(selected.id)!} onClose={()=>setSolidObjectId(null)} onApply={(geometryData,dimensions)=>{
+            const id=selected.id;setObjects(previous=>previous.map(obj=>obj.id===id?{...obj,type:'custom',geometryData,dimensions:dimensions as [number,number,number]}:obj));
+            setSolidObjectId(null);setStatus('Markierter Durchgang durch einen vereinigten Verschlusskörper geschlossen. Strg+Z macht die Änderung rückgängig.');
           }} />}
           <div className="drop-hint">STL / OBJ / .3dmaker hier ablegen</div>
           <div className="axis-badge"><span className="axis-x">X</span><span className="axis-y">Y</span><span className="axis-z">Z</span></div>
@@ -1278,7 +1285,7 @@ export default function App() {
           <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['X', 'Y', 'Z']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
           <VectorFields minimum={0.01} title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
           <div className="actual-dimensions"><span>LOKALE MAẞE INKL. SKALIERUNG</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
-          <div className="selection-tools"><button disabled={busy || selectedIds.length!==1 || !!holeObjectId} onClick={()=>{setCutMode(false);setHoleObjectId(selected.id);}}>Löcher markieren & schließen</button><button disabled={busy || selectedIds.length !== 1} onClick={repairSelected} title="Doppelte/degenerierte Flächen entfernen und Normalen ausrichten; Löcher werden gemeldet">Mesh reparieren</button><button onClick={()=>exportStl(true)}>Auswahl als STL</button><button onClick={()=>{
+          <div className="selection-tools"><button disabled={busy || selectedIds.length!==1 || !!holeObjectId || !!solidObjectId} onClick={()=>{setCutMode(false);setHoleObjectId(selected.id);}}>Löcher markieren & schließen</button><button disabled={busy || selectedIds.length!==1 || !!holeObjectId || !!solidObjectId} onClick={()=>{setCutMode(false);setSolidObjectId(selected.id);}}>Armloch / Durchgang schließen</button><button disabled={busy || selectedIds.length !== 1} onClick={repairSelected} title="Doppelte/degenerierte Flächen entfernen und Normalen ausrichten; Löcher werden gemeldet">Mesh reparieren</button><button onClick={()=>exportStl(true)}>Auswahl als STL</button><button onClick={()=>{
             const selectedObjects=objects.filter(o=>selectedIds.includes(o.id)).map(o=>({...o,groupId:undefined}));
             downloadFile('Auswahl.3dmaker',JSON.stringify({format:'3dmaker-project',version:1,name:'Auswahl',objects:selectedObjects}), 'application/json');
           }}>Auswahl als Projekt</button></div><div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>

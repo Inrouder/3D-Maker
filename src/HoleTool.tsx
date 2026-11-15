@@ -6,7 +6,7 @@ import { geometryFor } from './model';
 import type { Hole } from './hole-fill';
 type Data=NonNullable<ModelObject['geometryData']>;
 type Fill={geometryData:Data;patchPositions:number[];dimensions:number[];triangles:number};
-type Props={object:ModelObject;scene:THREE.Scene;camera:THREE.Camera;mesh:THREE.Mesh;controls:OrbitControls;onClose:()=>void;onApply:(data:Data,dimensions:number[])=>void};
+type Props={object:ModelObject;scene:THREE.Scene;camera:THREE.Camera;mesh:THREE.Mesh;controls:OrbitControls;onClose:()=>void;onSolidMode:()=>void;onApply:(data:Data,dimensions:number[])=>void};
 type Point=[number,number];
 const inside=(p:Point,polygon:Point[])=>{
   let result=false;
@@ -14,7 +14,7 @@ const inside=(p:Point,polygon:Point[])=>{
   return result;
 };
 const matrixFor=(object:ModelObject)=>new THREE.Matrix4().compose(new THREE.Vector3(...object.position),new THREE.Quaternion().setFromEuler(new THREE.Euler(...object.rotation.map(THREE.MathUtils.degToRad) as [number,number,number])),new THREE.Vector3(...object.scale));
-export default function HoleTool({object,scene,camera,mesh,controls,onClose,onApply}:Props){
+export default function HoleTool({object,scene,camera,mesh,controls,onClose,onSolidMode,onApply}:Props){
   const [holes,setHoles]=useState<Hole[]>([]),[chosen,setChosen]=useState<number|null>(null),[bulge,setBulge]=useState(0),[bulgeDraft,setBulgeDraft]=useState('0'),[collapsed,setCollapsed]=useState(false),[lassoMode,setLassoMode]=useState(false),[lasso,setLasso]=useState<Point[]>([]),[preview,setPreview]=useState<Fill|null>(null),[working,setWorking]=useState(true),[message,setMessage]=useState('Offene Ränder werden im Hintergrund erkannt …');
   const dataRef=useRef<Data|null>(null),analysisWorker=useRef<Worker|null>(null),fillWorker=useRef<Worker|null>(null),analysisVersion=useRef(0),fillVersion=useRef(0),analyzedObject=useRef<ModelObject|null>(null);
   const stateRef=useRef({holes,lassoMode,working});stateRef.current={holes,lassoMode,working};
@@ -29,7 +29,7 @@ export default function HoleTool({object,scene,camera,mesh,controls,onClose,onAp
     const geometry=geometryFor(object);const data={positions:Array.from(geometry.getAttribute('position').array),indices:geometry.index?Array.from(geometry.index.array):null};geometry.dispose();dataRef.current=data;
     void request<{holes:Hole[];ambiguous:number;nonManifoldEdges:number}>({action:'analyze',data},'analyze').then(result=>{
       if(token!==analysisVersion.current)return;analyzedObject.current=object;setHoles(result.holes);
-      setMessage(result.holes.length?`${result.holes.length} Öffnung(en). Rand anklicken oder eine Öffnung umkreisen.${result.ambiguous||result.nonManifoldEdges?' Problematische Randbereiche wurden ausgelassen; ggf. zuerst Mesh reparieren.':''}`:'Keine eindeutigen offenen Ränder gefunden. Bereits geschlossene, dickwandige Durchgangslöcher lassen sich mit diesem Werkzeug nicht füllen.');
+      setMessage(result.holes.length?`${result.holes.length} Öffnung(en). Rand anklicken oder eine Öffnung umkreisen.${result.ambiguous||result.nonManifoldEdges?' Problematische Randbereiche wurden ausgelassen; ggf. zuerst Mesh reparieren.':''}`:'Keine eindeutigen offenen Ränder gefunden. Für Armlöcher mit Materialstärke oben „Armloch / Durchgang verschließen“ wählen.');
     }).catch(error=>{if(token===analysisVersion.current)setMessage(error.message);}).finally(()=>{if(token===analysisVersion.current)setWorking(false);});
     return()=>{analysisVersion.current++;analysisWorker.current?.terminate();};
   },[object]);
@@ -85,7 +85,7 @@ export default function HoleTool({object,scene,camera,mesh,controls,onClose,onAp
     return()=>{canvas.removeEventListener('pointerdown',down,true);window.removeEventListener('pointermove',move,true);window.removeEventListener('pointerup',finish,true);window.removeEventListener('pointercancel',finish,true);controls.enabled=true;controls.mouseButtons.RIGHT=oldRight;if(pointerId!==null && canvas.hasPointerCapture(pointerId))canvas.releasePointerCapture(pointerId);};
   },[controls,mesh,camera,object]);
   return <><section className="hole-tool" aria-label="Löcher schließen"><header><strong>Löcher schließen</strong><button aria-label={collapsed?"Werkzeug ausklappen":"Werkzeug einklappen"} onClick={()=>setCollapsed(value=>!value)}>{collapsed?"+":"−"}</button><button aria-label="Löcherwerkzeug schließen" onClick={onClose}>×</button></header>
-    <div hidden={collapsed}><p role="status">{message}</p><div className="hole-modes"><button aria-pressed={!lassoMode} onClick={()=>setLassoMode(false)}>Rand anklicken</button><button aria-pressed={lassoMode} onClick={()=>setLassoMode(true)}>Umkreisen</button></div>
+    <div hidden={collapsed}><button onClick={onSolidMode}>Armloch / Durchgang verschließen</button><p role="status">{message}</p><div className="hole-modes"><button aria-pressed={!lassoMode} onClick={()=>setLassoMode(false)}>Rand anklicken</button><button aria-pressed={lassoMode} onClick={()=>setLassoMode(true)}>Umkreisen</button></div>
     <div className="hole-list">{holes.map(hole=><button key={hole.id} aria-pressed={chosen===hole.id} onClick={()=>setChosen(hole.id)}>Öffnung {hole.id+1} · {hole.perimeter.toFixed(1)} mm Rand</button>)}</div>
     <label className="creator-field">Wölbung (mm)<input type="number" step="0.5" value={bulgeDraft} disabled={chosen===null} onChange={event=>{setBulgeDraft(event.target.value);const value=event.target.valueAsNumber;if(Number.isFinite(value))setBulge(value);}} onBlur={()=>{if(bulgeDraft.trim()==='' || !Number.isFinite(Number(bulgeDraft)))setBulgeDraft(String(bulge));}} /></label>
     <p>Rand bleibt unverändert. Wölbung passt die neue Fläche an. Rechts ziehen: Drehen · Rad: Zoom · Esc: Abbrechen.</p>
