@@ -135,3 +135,45 @@ test('large binary STL imports in background and remains editable',async({page})
   console.log(`Large STL: ${stl.byteLength} bytes, ${mesh.geometry.index!.count/3} triangles, import and edit ${Date.now()-started} ms`);
   mesh.geometry.dispose();
 });
+
+test('object copy/cut/paste snapshots, repeated paste and undo/redo',async({page})=>{
+  await page.goto('/');await page.locator('.object-row').first().click();
+  await page.keyboard.press('Control+c');
+  await page.keyboard.press('Control+v');
+  await expect(page.locator('.object-row')).toHaveCount(2);
+  await expect(page.locator('.vector-fields').first().locator('input').first()).toHaveValue('10');
+  await page.keyboard.press('Control+v');
+  await expect(page.locator('.object-row')).toHaveCount(3);
+  await expect(page.locator('.vector-fields').first().locator('input').first()).toHaveValue('20');
+  await page.keyboard.press('Control+x');await expect(page.locator('.object-row')).toHaveCount(2);
+  await page.keyboard.press('Control+v');await expect(page.locator('.object-row')).toHaveCount(3);
+  await expect(page.locator('.vector-fields').first().locator('input').first()).toHaveValue('20');
+  await page.keyboard.press('Control+z');await expect(page.locator('.object-row')).toHaveCount(2);
+  await page.keyboard.press('Control+y');await expect(page.locator('.object-row')).toHaveCount(3);
+});
+
+test('group clipboard remains independent; field shortcuts do not cut objects',async({page})=>{
+  await page.goto('/');
+  const object={id:'a',name:'A',type:'box',position:[0,5,0],rotation:[0,0,0],scale:[1,1,1],dimensions:[10,10,10],color:'#43b6a8',groupId:'g'};
+  const data={format:'3dmaker-project',version:1,objects:[object,{...object,id:'b',name:'B',position:[20,5,0]}]};
+  await page.locator('input[type=file]').first().setInputFiles({name:'group.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(data))});
+  await page.locator('.object-row').first().click();await page.keyboard.press('Control+c');await page.keyboard.press('Control+v');
+  await expect(page.locator('.object-row.selected')).toHaveCount(2);
+  await expect(page.locator('.object-row')).toHaveCount(4);
+  await page.locator('.object-row').first().click();await expect(page.locator('.object-row.selected')).toHaveCount(2);
+  await page.getByLabel('Projektname').focus();await page.keyboard.press('Control+a');await page.keyboard.press('Control+x');
+  await expect(page.locator('.object-row')).toHaveCount(4);
+  await page.locator('.object-row').first().click();await page.getByRole('button',{name:'Einstellungen',exact:true}).click();
+  await page.keyboard.press('Control+x');await page.keyboard.press('Control+v');await expect(page.locator('.object-row')).toHaveCount(4);
+});
+
+test('native clipboard events support Electron menu actions',async({page})=>{
+  await page.goto('/');await page.locator('.object-row').first().click();
+  await page.evaluate(()=>document.body.dispatchEvent(new Event('copy',{bubbles:true,cancelable:true})));
+  await page.evaluate(()=>document.body.dispatchEvent(new Event('paste',{bubbles:true,cancelable:true})));
+  await expect(page.locator('.object-row')).toHaveCount(2);
+  await page.evaluate(()=>document.body.dispatchEvent(new Event('cut',{bubbles:true,cancelable:true})));
+  await expect(page.locator('.object-row')).toHaveCount(1);
+  await page.evaluate(()=>document.body.dispatchEvent(new Event('paste',{bubbles:true,cancelable:true})));
+  await expect(page.locator('.object-row')).toHaveCount(2);
+});

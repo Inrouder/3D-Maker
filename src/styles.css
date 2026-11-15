@@ -78,3 +78,4 @@
 button:disabled{cursor:not-allowed}
 .tools-scroll .wide-tool.active{border-color:var(--teal);background:var(--teal2)}
 .selection-tools{display:grid;gap:6px;margin-top:15px}.selection-tools button{text-align:left}
+.clipboard-tools{display:grid;gap:6px}.clipboard-tools .section-label{margin-bottom:4px}.clipboard-tools button{display:flex;justify-content:space-between;gap:6px}.clipboard-tools kbd{color:var(--muted);font:10px var(--mono)}

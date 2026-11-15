@@ -14,7 +14,7 @@ import { geometryFor, validateProject } from './model';
 import type { ModelObject, ShapeType } from './model';
 type CreatorMode = 'text' | 'gear' | 'thread';
 
-const APP_VERSION = '0.1.9';
+const APP_VERSION = '0.1.10';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
 declare global { interface Window { threeDMakerUpdates?: UpdateBridge } }
@@ -91,6 +91,8 @@ export default function App() {
   const cutHandleRef = useRef<THREE.Object3D | null>(null);
   const dragRef = useRef<{ id: string; groupId?: string; pointerId: number; startPoint: THREE.Vector3; startPosition: THREE.Vector3; plane: THREE.Plane } | null>(null);
   const [objects, setObjectsState] = useState<ModelObject[]>([initialObject()]);
+  const clipboardRef = useRef<{ objects: ModelObject[]; cut: boolean; pastes: number } | null>(null);
+  const [clipboardReady, setClipboardReady] = useState(false);
   const cloneObjects = (items: ModelObject[]) => items.slice();
   const setObjects = (update: ModelObject[] | ((previous: ModelObject[]) => ModelObject[])) => {
     const next = typeof update === 'function' ? update(objectsRef.current) : update;
@@ -886,12 +888,55 @@ export default function App() {
     }
   }, [selectedIds, cutAxis, cutPosition]);
 
+  const copySelection = (cut = false) => {
+    if (busy) return;
+    const items = objectsRef.current.filter(obj => selectedIds.includes(obj.id));
+    if (!items.length) { setStatus('Bitte zuerst Objekte auswählen.'); return; }
+    // Model data is immutable: keep a snapshot without duplicating large mesh arrays.
+    clipboardRef.current = { objects: items.slice(), cut, pastes: 0 };
+    setClipboardReady(true);
+    if (cut) {
+      setObjects(previous => previous.filter(obj => !selectedIds.includes(obj.id)));
+      setSelectedIds([]);
+    }
+    setStatus(`${items.length} Objekt(e) ${cut ? 'ausgeschnitten' : 'kopiert'} · Strg+V zum Einfügen.`);
+  };
+  const pasteSelection = () => {
+    if (busy) return;
+    const clipboard = clipboardRef.current;
+    if (!clipboard) { setStatus('Die Objekt-Zwischenablage ist leer.'); return; }
+    const offset = (clipboard.cut ? clipboard.pastes : clipboard.pastes + 1) * 10;
+    const groups = new Map<string, string>();
+    const groupCounts = new Map<string, number>();
+    for (const obj of clipboard.objects) if (obj.groupId) groupCounts.set(obj.groupId, (groupCounts.get(obj.groupId) ?? 0) + 1);
+    const pasted = clipboard.objects.map(obj => {
+      let groupId: string | undefined;
+      if (obj.groupId && (groupCounts.get(obj.groupId) ?? 0) > 1) {
+        if (!groups.has(obj.groupId)) groups.set(obj.groupId, makeId());
+        groupId = groups.get(obj.groupId);
+      }
+      return { ...obj, id: makeId(), groupId, name: clipboard.cut && clipboard.pastes === 0 ? obj.name : `${obj.name} Kopie`,
+        position: [obj.position[0] + offset, obj.position[1], obj.position[2] + offset] as [number, number, number] };
+    });
+    clipboard.pastes++;
+    setObjects(previous => [...previous, ...pasted]);
+    setSelectedIds(pasted.map(obj => obj.id));
+    setStatus(`${pasted.length} Objekt(e) eingefügt.`);
+  };
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)) return;
       if (settingsOpen || creatorMode) {
         if (event.key === 'Escape') { setSettingsOpen(false); setCreatorMode(null); }
+        return;
+      }
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && ['c', 'x', 'v'].includes(event.key.toLowerCase())) {
+        event.preventDefault();
+        if (event.repeat) return;
+        if (event.key.toLowerCase() === 'v') pasteSelection();
+        else copySelection(event.key.toLowerCase() === 'x');
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); return; }
@@ -909,9 +954,26 @@ export default function App() {
       }
       if (event.key === 'Escape') setSelectedIds([]);
     };
+    // Electron's native Edit menu can dispatch clipboard events instead of keydown.
+    const onClipboard = (event: ClipboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (['INPUT','TEXTAREA','SELECT'].includes(target.tagName) || target.isContentEditable)) return;
+      if (settingsOpen || creatorMode || busy) return;
+      event.preventDefault();
+      if (event.type === 'paste') pasteSelection();
+      else copySelection(event.type === 'cut');
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [subtract, cutAtPlane, selectedIds, historyVersion, projectName, settingsOpen, creatorMode]);
+    window.addEventListener('copy', onClipboard);
+    window.addEventListener('cut', onClipboard);
+    window.addEventListener('paste', onClipboard);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('copy', onClipboard);
+      window.removeEventListener('cut', onClipboard);
+      window.removeEventListener('paste', onClipboard);
+    };
+  }, [subtract, cutAtPlane, selectedIds, historyVersion, projectName, settingsOpen, creatorMode, busy]);
 
   const saveProject = () => {
     const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
@@ -1071,6 +1133,12 @@ export default function App() {
             <button className="shape-button" onClick={() => setCreatorMode('gear')}><span className="shape-icon">⚙</span><span>Zahnrad</span></button>
             <button className="shape-button" onClick={() => setCreatorMode('thread')}><span className="shape-icon">⤿</span><span>Gewinde</span></button>
           </div>
+        </div>
+        <div className="tool-section clipboard-tools">
+          <div className="section-label">{appLanguage === 'de' ? 'ZWISCHENABLAGE' : 'CLIPBOARD'}</div>
+          <button disabled={busy || !selectedIds.length} onClick={()=>copySelection()} title="Strg+C">{appLanguage === 'de' ? 'Kopieren' : 'Copy'} <kbd>Ctrl+C</kbd></button>
+          <button disabled={busy || !selectedIds.length} onClick={()=>copySelection(true)} title="Strg+X">{appLanguage === 'de' ? 'Ausschneiden' : 'Cut'} <kbd>Ctrl+X</kbd></button>
+          <button disabled={busy || !clipboardReady} onClick={pasteSelection} title="Strg+V">{appLanguage === 'de' ? 'Einfügen' : 'Paste'} <kbd>Ctrl+V</kbd></button>
         </div>
         <div className="tool-section">
           <div className="section-label">{t("grouping")}</div>
