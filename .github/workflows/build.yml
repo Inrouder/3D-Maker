@@ -99,4 +99,9 @@ jobs:
           test -s portable/3D-Maker-Portable.exe
           sed -i 's/\r$//' portable/SHA256SUMS.txt
           (cd portable && sha256sum --check SHA256SUMS.txt)
-          gh release create "${tag}" portable/*.exe portable/SHA256SUMS.txt --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --title "3D-Maker ${version}" --generate-notes --latest
+          latest_flag=--latest
+          latest_tag=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [[ -n "${latest_tag}" ]] && ! node -e 'const {newer}=require("./electron/desktop.cjs"); process.exit(newer(process.argv[1],process.argv[2])?0:1)' "${version}" "${latest_tag}"; then
+            latest_flag=--latest=false
+          fi
+          gh release create "${tag}" portable/*.exe portable/SHA256SUMS.txt --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" --title "3D-Maker ${version}" --generate-notes "${latest_flag}"

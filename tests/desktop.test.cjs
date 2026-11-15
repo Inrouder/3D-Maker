@@ -21,3 +21,8 @@ test('Windows registration quotes the persistent launcher and never takes over g
   assert.ok(entries.every(e=>e.key.startsWith('HKCU\\')));assert.ok(entries.every(e=>!e.key.includes('.json') && !e.key.includes('UserChoice')));
   assert.throws(()=>associationEntries('C:\\bad"path.exe'));assert.throws(()=>associationEntries('relative.exe'));
 });
+
+test('updater prefers the stable filename within the validated version',()=>{
+  const value=release();value.assets.push({name:'3D-Maker-Portable.exe',size:123,browser_download_url:'https://github.com/Inrouder/3D-Maker/releases/download/v0.1.11/3D-Maker-Portable.exe'});
+  assert.equal(releaseInfo(value,'0.1.10').url,value.assets[1].browser_download_url);
+});

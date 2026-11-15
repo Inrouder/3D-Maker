@@ -17,7 +17,9 @@ function releaseInfo(release, currentVersion) {
   const asset=release.assets?.find(a=>a.name===`3D-Maker-Portable-${version}.exe`);
   const expected=`https://github.com/${REPO}/releases/download/${release.tag_name}/3D-Maker-Portable-${version}.exe`;
   if(!asset || asset.browser_download_url!==expected || !asset.size) return {status:'unavailable',message:'Das Release enthält noch keine vollständige portable Windows-EXE.'};
-  return {status:newer(version,currentVersion)?'available':'current',currentVersion,latestVersion:release.tag_name,title:release.name||release.tag_name,notes:String(release.body||'').slice(0,2500),url:expected,publishedAt:release.published_at||null};
+  const aliasUrl=`https://github.com/${REPO}/releases/download/${release.tag_name}/3D-Maker-Portable.exe`;
+  const alias=release.assets.find(a=>a.name==='3D-Maker-Portable.exe' && a.browser_download_url===aliasUrl && a.size);
+  return {status:newer(version,currentVersion)?'available':'current',currentVersion,latestVersion:release.tag_name,title:release.name||release.tag_name,notes:String(release.body||'').slice(0,2500),url:alias?aliasUrl:expected,publishedAt:release.published_at||null};
 }
 function supportedFileArgs(args) {
   return args.filter(arg=>typeof arg==='string' && path.isAbsolute(arg) && ['.3dmaker','.json','.stl','.obj'].includes(path.extname(arg).toLowerCase()));

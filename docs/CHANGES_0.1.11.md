@@ -6,7 +6,7 @@ Bisher lagen aktuelle Builds nur als kurzlebige Actions-Artefakte auf einem Entw
 
 Der Hauptbranch veröffentlicht künftig jede neue Versionsnummer nach erfolgreichen Web- und Windows-Jobs automatisch. Releases enthalten eine versionierte EXE, den festen Alias `3D-Maker-Portable.exe` und SHA-256-Prüfsummen. Der README-Link `/releases/latest/download/3D-Maker-Portable.exe` benötigt keine GitHub-Anmeldung. Bestehende Versionen werden nicht überschrieben; neue Änderungen benötigen eine neue Versionsnummer.
 
-Die Updateprüfung akzeptiert nur stabile Releases mit exakt passender, vorhandener Windows-EXE im Projekt-Repository. Versionsvergleich arbeitet numerisch, auch bei mehrstelligen Patchversionen. „Update herunterladen“ öffnet direkt den passenden EXE-Download. Der Austausch bleibt manuell: Arbeit speichern, App schließen, EXE ersetzen. Keine automatische Installation oder Neustart mit Verlust ungespeicherter Arbeit.
+Die Updateprüfung akzeptiert nur stabile Releases mit exakt passender, vorhandener Windows-EXE im Projekt-Repository. Versionsvergleich arbeitet numerisch, auch bei mehrstelligen Patchversionen. „Update herunterladen“ öffnet direkt den passenden EXE-Download (fester EXE-Dateiname innerhalb des geprüften Releases). Der Austausch bleibt manuell: Arbeit speichern, App schließen, EXE ersetzen. Keine automatische Installation oder Neustart mit Verlust ungespeicherter Arbeit.
 
 ## Dateien öffnen und als Standard verwenden
 
@@ -28,3 +28,7 @@ Unter Einstellungen gibt es auch „Datei öffnen …“. In der Windows-App ist
 - Neue Tests: Versionsvergleich, unvollständige/fremde Release-Downloads, Windows-Registry-Pfadquotierung, keine JSON-/UserChoice-Übernahme, Einstellungen mit Fehleranzeige, Dateieingang beim Start und während laufender App.
 - Windows-CI-Smoke-Test startet die gepackte App, prüft Startup-Projekt, echte HKCU-Zuordnung zum dauerhaften Launcher, zweiten Dateiaufruf sowie STL-Import- und Reparatur-Worker aus dem gepackten `file://`-Build.
 - Keine Überprüfung der manuellen Standard-App-Auswahl auf dem privaten Windows-PC; diese Einstellung bleibt eine Nutzeraktion.
+
+## Ausgeführte Ergebnisse
+
+Produktionsbuild erfolgreich; 22 Unit-/Desktoptests und 14 Browsertests bestanden. Der Windows-Testlauf [43756551997](https://github.com/Inrouder/3D-Maker/actions/runs/43756551997) hat auch den Smoke-Test der gepackten App erfolgreich ausgeführt (Projektstart, Launcher-Registry, zweite Instanz, STL-/Reparatur-Worker). Die manuelle Standard-App-Auswahl auf dem Nutzer-PC bleibt erforderlich.

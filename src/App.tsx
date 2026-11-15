@@ -1240,7 +1240,7 @@ export default function App() {
         <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
           <div className="viewport-badge">XYZ <span>·</span> MM</div>
           {selected && <div className="transform-readout"><strong>{transformMode === 'scale' ? 'SKALIERUNG LIVE' : transformMode === 'rotate' ? 'DREHUNG LIVE' : 'POSITION LIVE'}</strong>{transformMode === 'scale' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.dimensions[i] ?? selected.dimensions[i] * selected.scale[i]).toFixed(2)} mm</b> <em>{(liveTransform?.delta[i] ?? 0) >= 0 ? '+' : ''}{(liveTransform?.delta[i] ?? 0).toFixed(2)} mm</em></span>)}</div> : transformMode === 'rotate' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.rotation[i] ?? selected.rotation[i]).toFixed(1)}°</b></span>)}</div> : <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{selected.position[i].toFixed(2)} mm</b></span>)}</div>}</div>}
-          <div className="drop-hint">STL / OBJ / .3dmaker.json hier ablegen</div>
+          <div className="drop-hint">STL / OBJ / .3dmaker hier ablegen</div>
           <div className="axis-badge"><span className="axis-x">X</span><span className="axis-y">Y</span><span className="axis-z">Z</span></div>
           {objects.length === 0 && <div className="empty-viewport">Erstelle links deinen ersten Körper.</div>}
         </div>
