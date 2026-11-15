@@ -3,11 +3,21 @@
 **Ein lokaler 3D-Modellierer für Windows und den Browser.** Entwerfe und bearbeite 3D-Objekte in einer übersichtlichen Arbeitsfläche – ohne Benutzerkonto, Cloudzwang, Werbung oder Slicer.
 
 [![Build](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml/badge.svg)](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/Version-0.1.10-19b5a5)
+![Version](https://img.shields.io/badge/Version-0.1.11-19b5a5)
 ![Windows](https://img.shields.io/badge/Windows-Portable-2767bb)
 ![Status](https://img.shields.io/badge/Status-Experimentell-ef9d38)
 
 > **Entwicklungsstatus:** 3D-Maker befindet sich in aktiver Entwicklung. Vor produktivem Einsatz, besonders bei Passungen, Gewinden oder sicherheitsrelevanten Teilen, Geometrien und exportierte STLs überprüfen.
+
+## Aktuelle Windows-Version herunterladen
+
+**[⬇ Portable EXE direkt herunterladen](https://github.com/Inrouder/3D-Maker/releases/latest/download/3D-Maker-Portable.exe)** · [Versionshinweise und SHA-256-Prüfsummen](https://github.com/Inrouder/3D-Maker/releases/latest)
+
+Der Link zeigt immer auf das neueste vollständig gebaute stabile Release, ohne GitHub-Anmeldung. EXE in einem dauerhaften Ordner ablegen und starten; keine Installation und kein separates Node.js nötig. Actions-Artefakte sind nur temporäre Testbuilds.
+
+**Updates:** Einstellungen → Programm-Updates → Jetzt nach Updates suchen. Eine neue Version wird direkt im Browser heruntergeladen. Arbeit speichern, App schließen und EXE manuell ersetzen; keine heimliche Installation.
+
+**Als Standardprogramm:** Einstellungen → Dateien & Standardprogramm → Dateitypen registrieren → Windows-Standardprogramme öffnen. Dort 3D-Maker für `.3dmaker`, `.stl` und/oder `.obj` auswählen. Nach Verschieben oder Umbenennen der EXE erneut registrieren. Ältere `.3dmaker.json`-Projekte lassen sich weiterhin in der App öffnen; neue Projekte verwenden `.3dmaker`.
 
 ## Auf einen Blick
 
@@ -40,13 +50,13 @@ Das neue 3D-Würfel-Icon wird als SVG im Browser und als mehrstufiges Windows-IC
 2. `3D-Maker-Portable-<version>.exe` herunterladen.
 3. Die EXE starten. Es ist keine klassische Installation und kein separates Node.js erforderlich.
 
-Wenn noch kein GitHub Release existiert: [Actions / Build 3DMaker](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml) öffnen, einen erfolgreichen Build auswählen und unter **Artifacts** `3DMaker-Portable-Windows-x64` laden. Artefakte sind zeitlich begrenzt und gelten nicht als veröffentlichte Updates.
+Entwicklungs-/Testbuilds finden sich weiterhin unter [Actions / Build 3DMaker](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml). Die reguläre Downloadquelle ist der feste Release-Link oben; Actions-Artefakte laufen ab und benötigen häufig eine GitHub-Anmeldung.
 
 ### Integrierte Updateprüfung
 
 Die Windows-Version prüft beim Start sowie alle sechs Stunden auf neue **GitHub Releases**. Eine neue Version wird in den Einstellungen angezeigt, inklusive Versionsnummer und Versionshinweisen. Unter **Einstellungen → Programm-Updates** lässt sich die Prüfung auch manuell starten.
 
-- Updates werden **nicht** heimlich installiert: `Update herunterladen` öffnet die Release-Seite im Standardbrowser. Vor dem Wechsel die Arbeit speichern, alte EXE schließen und neue EXE starten.
+- Updates werden **nicht** heimlich installiert: `Update herunterladen` öffnet den direkten EXE-Download des geprüften Releases im Standardbrowser. Vor dem Wechsel die Arbeit speichern, alte EXE schließen und neue EXE starten.
 - **Öffentliches Repository:** Die Updateprüfung verwendet die öffentliche GitHub-Releases-API. Es ist **kein Login und kein Token** erforderlich. GitHub kann bei sehr häufigen Abfragen API-Limits anwenden.
 - Ohne erreichbaren Release oder GitHub-Zugriff erscheint eine klare Statusmeldung. Für die Browser-Version steht die Electron-Updatefunktion nicht zur Verfügung.
 - Die Versionsnummer eines Release-Tags (`v0.1.8` usw.) muss zur App-Version in `package.json` passen.
@@ -85,13 +95,19 @@ Portable Windows-EXE (unter Windows):
 npm run dist:portable
 ```
 
-Der GitHub-Actions-Workflow baut bei Änderungen am Standardbranch eine Web-Version und eine portable Windows-EXE. Wird ein Tag wie `v0.1.8` gepusht, erstellt der Workflow zusätzlich einen GitHub Release mit der EXE. **Die Release-Erstellung setzt die nötigen Actions-Schreibrechte voraus.** Ohne veröffentlichten Release kann die Updateprüfung keine neue Version melden.
+Der GitHub-Actions-Workflow baut Änderungen am Standardbranch und veröffentlicht jede **neue Versionsnummer** nach erfolgreichen Web-/Windows-Tests automatisch als stabiles GitHub Release. Vor einer neuen Programmversion `package.json`, Lockfile und App-Version gemeinsam erhöhen. Vorhandene Versionen werden nicht überschrieben. Ein Tag muss zur Versionsnummer passen.
+
+Jedes Release enthält die versionierte EXE, den festen Namen `3D-Maker-Portable.exe` und `SHA256SUMS.txt`. Dadurch bleiben README-Download und integrierte Updateprüfung dauerhaft auf derselben Quelle. Der Windows-Build prüft außerdem die gepackte App einschließlich Dateiaufruf, Dateizuordnung und Import-/Reparatur-Worker.
 
 ## Technologie
 
 React 19 · TypeScript · Three.js · Vite · Electron · electron-builder · GitHub Actions.
 
 3D-Maker speichert Projekte lokal und benötigt für die eigentliche Modellierung keine Netzwerkverbindung. Eine Verbindung zu GitHub wird ausschließlich für optionale Updateprüfungen oder das manuelle Öffnen des Repositorys verwendet.
+
+## Änderungen 0.1.11
+
+[Releases, Updates und Windows-Dateizuordnung](docs/CHANGES_0.1.11.md)
 
 ## Änderungen 0.1.10
 

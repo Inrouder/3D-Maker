@@ -45,7 +45,7 @@ test('settings blocks destructive shortcuts; save uses current project name', as
   await page.getByLabel('Projektname').press('Tab');
   const download=page.waitForEvent('download');
   await page.keyboard.press('Control+s');
-  expect((await download).suggestedFilename()).toBe('Neuer Name.3dmaker.json');
+  expect((await download).suggestedFilename()).toBe('Neuer Name.3dmaker');
 });
 
 test('group member uses world Y when placed on ground', async ({page})=>{
@@ -176,4 +176,35 @@ test('native clipboard events support Electron menu actions',async({page})=>{
   await expect(page.locator('.object-row')).toHaveCount(1);
   await page.evaluate(()=>document.body.dispatchEvent(new Event('paste',{bubbles:true,cancelable:true})));
   await expect(page.locator('.object-row')).toHaveCount(2);
+});
+
+test('desktop settings register types, open defaults and download updates with errors visible',async({page})=>{
+  await page.addInitScript(()=>{
+    (window as any).desktopCalls=[];
+    (window as any).threeDMakerFiles={isWindows:true,take:async()=>null,onPending:()=>()=>{},pick:async()=>{},register:async()=>{(window as any).desktopCalls.push('register');return {message:'Dateitypen registriert',executable:'C:\\Maker.exe'};},defaults:async()=>{(window as any).desktopCalls.push('defaults');}};
+    (window as any).threeDMakerUpdates={check:async()=>({status:'available',latestVersion:'v9.0.0',notes:'Neu'}),openRelease:async()=>{throw new Error('Download nicht erreichbar');}};
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Einstellungen',exact:true}).click();
+  await page.getByRole('button',{name:'Dateitypen registrieren',exact:true}).click();
+  await expect(page.getByRole('status')).toContainText('Dateitypen registriert');
+  await page.getByRole('button',{name:'Windows-Standardprogramme öffnen',exact:true}).click();
+  expect(await page.evaluate(()=>(window as any).desktopCalls)).toEqual(['register','defaults']);
+  await page.getByRole('button',{name:'Update herunterladen',exact:true}).click();
+  await expect(page.getByRole('dialog')).toContainText('Download nicht erreichbar');
+});
+
+test('desktop startup and subsequent open requests load actual project files once',async({page})=>{
+  await page.addInitScript(()=>{
+    const project={format:'3dmaker-project',version:1,name:'Windows-Projekt',objects:[]};
+    (window as any).fileQueue=[{name:'Windows.3dmaker',data:Array.from(new TextEncoder().encode(JSON.stringify(project)))}];
+    (window as any).threeDMakerFiles={isWindows:true,take:async()=>{await new Promise(resolve=>setTimeout(resolve,20));return (window as any).fileQueue.shift()??null;},onPending:(callback:()=>void)=>{(window as any).notifyFiles=callback;return ()=>{};}};
+  });
+  await page.goto('/');await expect(page.getByLabel('Projektname')).toHaveValue('Windows-Projekt');
+  await expect(page.locator('.object-row')).toHaveCount(0);
+  page.on('dialog',dialog=>dialog.accept());
+  await page.evaluate(()=>{
+    (window as any).fileQueue.push({name:'Zweites.3dmaker',data:Array.from(new TextEncoder().encode(JSON.stringify({format:'3dmaker-project',version:1,name:'Zweites Projekt',objects:[]})))});
+    (window as any).notifyFiles();
+  });
+  await expect(page.getByLabel('Projektname')).toHaveValue('Zweites Projekt');
 });

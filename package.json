@@ -1,7 +1,7 @@
 {
   "name": "3d-maker",
   "private": true,
-  "version": "0.1.10",
+  "version": "0.1.11",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "dist:portable": "npm run icon:generate && npm run build && electron-builder --win portable",
     "icon:generate": "node build/generate-icon.cjs",
-    "test": "tsx --test tests/model.test.ts",
+    "test": "tsx --test tests/model.test.ts tests/desktop.test.cjs",
     "test:browser": "playwright test"
   },
   "dependencies": {

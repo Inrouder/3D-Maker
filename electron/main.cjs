@@ -1,55 +1,84 @@
-const { app, BrowserWindow, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, shell, ipcMain, dialog } = require('electron');
 const path = require('node:path');
-const REPO = 'Inrouder/3D-Maker';
+const fs = require('node:fs/promises');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const { REPO, releaseInfo, supportedFileArgs, associationEntries } = require('./desktop.cjs');
 app.setName('3D-Maker');
-
-function versionParts(value) { return String(value || '').replace(/^v/i, '').split(/[.-]/).slice(0,3).map(n => Number.parseInt(n, 10) || 0); }
-function newer(next, current) {
-  const a = versionParts(next), b = versionParts(current);
-  return a.some((n, i) => n > b[i] && a.slice(0, i).every((x, j) => x === b[j]));
-}
+let win;
+const pendingFiles = [];
+let picking = false;
 async function checkUpdates() {
-  const headers = { 'Accept': 'application/vnd.github+json', 'User-Agent': '3D-Maker-Updater', 'X-GitHub-Api-Version': '2022-11-28' };
-  const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers, signal: AbortSignal.timeout(12000) });
+  const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+    headers:{'Accept':'application/vnd.github+json','User-Agent':'3D-Maker-Updater','X-GitHub-Api-Version':'2022-11-28'}, signal:AbortSignal.timeout(12000)
+  });
   if (!response.ok) {
-    if (response.status === 404) return { status: 'unavailable', message: 'Noch kein öffentliches GitHub Release veröffentlicht. Ein Versions-Tag mit angehängter Windows-EXE ist erforderlich.' };
-    if (response.status === 401 || response.status === 403) return { status: 'error', message: 'GitHub API-Limit erreicht oder Zugriff nicht möglich. Bitte später erneut prüfen.' };
-    return { status: 'error', message: `GitHub antwortet mit HTTP ${response.status}.` };
+    if(response.status===404)return {status:'unavailable',message:'Noch kein stabiles Release veröffentlicht. Bitte später erneut prüfen.'};
+    if(response.status===403 || response.status===429)return {status:'error',message:'GitHub API-Limit erreicht. Bitte später erneut prüfen.'};
+    throw new Error(`GitHub antwortet mit HTTP ${response.status}.`);
   }
-  const release = await response.json();
-  const currentVersion = app.getVersion();
-  return {
-    status: newer(release.tag_name, currentVersion) ? 'available' : 'current',
-    currentVersion,
-    latestVersion: release.tag_name,
-    title: release.name || release.tag_name,
-    notes: String(release.body || '').slice(0, 2500),
-    url: `https://github.com/${REPO}/releases/latest`,
-    publishedAt: release.published_at || null
-  };
+  return releaseInfo(await response.json(),app.getVersion());
+}
+function queueFiles(args) {
+  pendingFiles.push(...supportedFileArgs(args));
+  if(win && !win.isDestroyed()) {
+    if(win.isMinimized())win.restore();win.show();win.focus();
+    win.webContents.send('files:pending');
+  }
 }
 function createWindow() {
-  const win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 960, minHeight: 640,
-    title: '3D-Maker', icon: path.join(__dirname, '..', 'build', 'icon.png'), backgroundColor: '#111318', autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      nodeIntegration: false, contextIsolation: true, sandbox: true
-    }
+  win = new BrowserWindow({
+    width:1440,height:900,minWidth:960,minHeight:640,title:'3D-Maker',icon:path.join(__dirname,'..','build','icon.png'),backgroundColor:'#111318',autoHideMenuBar:true,
+    webPreferences:{preload:path.join(__dirname,'preload.cjs'),nodeIntegration:false,contextIsolation:true,sandbox:true}
   });
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('https://')) shell.openExternal(url);
-    return { action: 'deny' };
-  });
-  win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  win.webContents.setWindowOpenHandler(({url})=>{if(url.startsWith('https://'))void shell.openExternal(url);return {action:'deny'};});
+  win.loadFile(path.join(__dirname,'..','dist','index.html'));
 }
-app.whenReady().then(() => {
-  ipcMain.handle('updates:check', async () => {
-    try { return await checkUpdates(); }
-    catch (e) { return { status: 'error', message: e instanceof Error ? e.message : 'Updateprüfung fehlgeschlagen.' }; }
+if (!app.requestSingleInstanceLock()) app.quit();
+else {
+  queueFiles(process.argv.slice(app.isPackaged ? 1 : 2));
+  app.on('second-instance',(_event,args)=>queueFiles(args.slice(1)));
+  app.on('open-file',(event,file)=>{event.preventDefault();queueFiles([file]);});
+  app.whenReady().then(()=>{
+    ipcMain.handle('updates:check',async()=>{try{return await checkUpdates();}catch(error){return {status:'error',message:error.message};}});
+    ipcMain.handle('updates:open-release',async()=>{
+      const info=await checkUpdates();
+      if(info.status!=='available' && info.status!=='current')throw new Error(info.message||'Kein Download verfügbar.');
+      await shell.openExternal(info.url);
+    });
+    ipcMain.handle('files:pick',async()=>{
+      if(picking)return;
+      picking=true;
+      try {
+        const result=await dialog.showOpenDialog(win,{title:'Projekt oder 3D-Datei öffnen',properties:['openFile'],filters:[{name:'3D-Maker / Mesh',extensions:['3dmaker','json','stl','obj']}]});
+        if(!result.canceled)queueFiles(result.filePaths);
+      } finally {picking=false;}
+    });
+    ipcMain.handle('files:take',async()=>{
+      const file=pendingFiles.shift();if(!file)return null;
+      try {
+        const stat=await fs.stat(file);
+        if(!stat.isFile() || stat.size>512*1024*1024)throw new Error('Nur Dateien bis 512 MB können über Windows geöffnet werden.');
+        const data=await fs.readFile(file);
+        return {name:path.basename(file),data};
+      }catch(error){return {error:`Datei konnte nicht geöffnet werden: ${error.message}`};}
+    });
+    ipcMain.handle('files:register',async()=>{
+      if(process.platform!=='win32' || !app.isPackaged)throw new Error('Dateizuordnung ist nur in der Windows-App verfügbar.');
+      // Portable apps run from a temporary extraction directory; register the launcher instead.
+      const executable=process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+      const run=promisify(execFile);
+      for(const entry of associationEntries(executable)) {
+        await run('reg.exe',['add',entry.key,...(entry.name===null?['/ve']:['/v',entry.name]),'/t','REG_SZ','/d',entry.value,'/f'],{windowsHide:true});
+      }
+      return {message:'3D-Maker ist für .3dmaker, .stl und .obj registriert. Bitte in Windows als Standard auswählen.',executable};
+    });
+    ipcMain.handle('files:defaults',()=>{
+      if(process.platform!=='win32')throw new Error('Nur unter Windows verfügbar.');
+      return shell.openExternal('ms-settings:defaultapps');
+    });
+    createWindow();
+    app.on('activate',()=>{if(!BrowserWindow.getAllWindows().length)createWindow();});
   });
-  ipcMain.handle('updates:open-release', () => shell.openExternal(`https://github.com/${REPO}/releases/latest`));
-  createWindow();
-  app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
-});
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+}
+app.on('window-all-closed',()=>{if(process.platform!=='darwin')app.quit();});

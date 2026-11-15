@@ -14,10 +14,14 @@ import { geometryFor, validateProject } from './model';
 import type { ModelObject, ShapeType } from './model';
 type CreatorMode = 'text' | 'gear' | 'thread';
 
-const APP_VERSION = '0.1.10';
+const APP_VERSION = '0.1.11';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
-declare global { interface Window { threeDMakerUpdates?: UpdateBridge } }
+type FileBridge = {
+  isWindows:boolean; pick:()=>Promise<void>; take:()=>Promise<{name?:string;data?:Uint8Array;error?:string}|null>;
+  register:()=>Promise<{message:string;executable:string}>; defaults:()=>Promise<void>; onPending:(callback:()=>void)=>()=>void;
+};
+declare global { interface Window { threeDMakerUpdates?: UpdateBridge; threeDMakerFiles?: FileBridge } }
 type AppLanguage = 'de' | 'en';
 type AppTheme = 'dark' | 'light';
 const uiText: Record<AppLanguage, Record<string, string>> = {
@@ -56,6 +60,24 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateResult | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [fileSettingsMessage, setFileSettingsMessage] = useState('');
+  const [fileSettingsBusy, setFileSettingsBusy] = useState(false);
+  const desktopAction = async (action:'register'|'defaults'|'pick') => {
+    const files=window.threeDMakerFiles;if(!files)return;
+    setFileSettingsBusy(true);
+    try {
+      if(action==='register')setFileSettingsMessage((await files.register()).message);
+      else if(action==='defaults')await files.defaults();
+      else {await files.pick();setSettingsOpen(false);}
+    }catch(error){setFileSettingsMessage(error instanceof Error?error.message:'Aktion fehlgeschlagen.');}
+    finally{setFileSettingsBusy(false);}
+  };
+  const downloadUpdate=async()=>{
+    setUpdateBusy(true);
+    try {await window.threeDMakerUpdates?.openRelease();}
+    catch(error){setUpdateInfo(previous=>({...previous,status:previous?.status??'error',message:error instanceof Error?error.message:'Download konnte nicht geöffnet werden.'}));}
+    finally{setUpdateBusy(false);}
+  };
   const checkForUpdates = useCallback(async () => {
     const updater = window.threeDMakerUpdates;
     if (!updater) { setUpdateInfo({ status: 'unavailable', message: 'Updateprüfung ist nur in der Windows-Desktop-App verfügbar.' }); return; }
@@ -977,25 +999,19 @@ export default function App() {
 
   const saveProject = () => {
     const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
-    downloadFile(`${projectName.replace(/[^a-z0-9-_ ]/gi, '_')}.3dmaker.json`, JSON.stringify(project, null, 2), 'application/json');
+    downloadFile(`${projectName.replace(/[^a-z0-9-_ ]/gi, '_')}.3dmaker`, JSON.stringify(project, null, 2), 'application/json');
     setStatus('Projekt lokal exportiert.');
   };
-  const openProject = (file?: File) => {
+  const openProject = async (file?: File) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = validateProject(JSON.parse(String(reader.result)));
-        setObjects(data.objects);
-        setProjectName(typeof data.name === 'string' ? data.name : 'Importiertes Projekt');
-        setSelectedIds([]);
-        setStatus('Projekt geöffnet.');
-      } catch (e) { setStatus(e instanceof Error ? e.message : 'Projekt konnte nicht geöffnet werden.'); }
-    };
-    reader.readAsText(file);
+    try {
+      const data=validateProject(JSON.parse(await file.text()));
+      if(undoStackRef.current.length && !window.confirm('Projekt öffnen und die aktuelle Arbeitsfläche ersetzen? Ungespeicherte Arbeit vorher speichern.'))return;
+      setObjects(data.objects);setProjectName(data.name??'Importiertes Projekt');setSelectedIds([]);setStatus('Projekt geöffnet.');
+    }catch(error){setStatus(error instanceof Error?error.message:'Projekt konnte nicht geöffnet werden.');}
   };
-  const importMesh = async (file?: File) => {
-    if (!file || busy) return;
+  const importMesh = async (file?: File, queued = false) => {
+    if (!file || (busy && !queued)) return;
     const extension=file.name.split('.').pop()?.toLowerCase();
     if(extension!=='stl' && extension!=='obj'){setStatus('Bitte eine STL- oder OBJ-Datei verwenden.');return;}
     setBusy(true);setStatus(`${file.name} wird im Hintergrund importiert …`);
@@ -1012,12 +1028,46 @@ export default function App() {
     }catch(error){setStatus('Import fehlgeschlagen: '+(error instanceof Error?error.message:'Dateifehler'));}
     finally{worker.terminate();setBusy(false);}
   };
+  const externalBusyRef = useRef(false);
+  externalBusyRef.current=busy;
+  const externalDrainState=useRef({running:false,wake:false});
+  const externalFileHandler = useRef<(file:File)=>Promise<void>>(async()=>{});
+  externalFileHandler.current=async(file)=>{
+    while(externalBusyRef.current)await new Promise(resolve=>window.setTimeout(resolve,50));
+    if(/\.(stl|obj)$/i.test(file.name)){
+      if(!undoStackRef.current.length)setObjects([]);
+      await importMesh(file,true);
+    }
+    else await openProject(file);
+  };
+  useEffect(()=>{
+    const bridge=window.threeDMakerFiles;if(!bridge)return;
+    const state=externalDrainState.current;
+    const drain=async()=>{
+      state.wake=true;if(state.running)return;
+      state.running=true;
+      try {
+        while(state.wake){
+          state.wake=false;
+          let item;
+          while((item=await bridge.take())){
+            if(item.error){setStatus(item.error);continue;}
+            if(item.data && item.name)await externalFileHandler.current(new File([new Uint8Array(item.data).buffer],item.name));
+          }
+        }
+      }catch(error){setStatus(error instanceof Error?error.message:'Datei konnte nicht geöffnet werden.');}
+      finally{state.running=false;}
+    };
+    const unsubscribe=bridge.onPending(()=>{void drain();});void drain();
+    return()=>{unsubscribe();};
+  },[]);
+
   const handleDroppedFiles = (files: FileList | File[]) => {
     const file = Array.from(files)[0];
     if (!file) return;
     const extension = file.name.split('.').pop()?.toLowerCase();
     if (extension === 'stl' || extension === 'obj') importMesh(file);
-    else if (extension === 'json' || file.name.toLowerCase().endsWith('.3dmaker.json')) openProject(file);
+    else if (extension === '3dmaker' || extension === 'json' || file.name.toLowerCase().endsWith('.3dmaker.json')) openProject(file);
     else setStatus('Dateiformat nicht unterstützt. Erlaubt: STL, OBJ und 3DMaker-Projekte.');
   };
   const onDragOver = (event: DragEvent<HTMLDivElement>) => {
@@ -1096,7 +1146,12 @@ export default function App() {
   };
 
   return <main className={`app-shell theme-${appTheme}`}>
-    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-updates"><h3>{appLanguage === 'de' ? 'Programm-Updates' : 'Software updates'}</h3><p className="creator-hint">{appLanguage === 'de' ? 'Automatische Prüfung beim Start und alle 6 Stunden. Ein Update wird angezeigt, aber nie ohne Zustimmung installiert.' : 'Automatic check on startup and every 6 hours. Updates are never installed without your consent.'}</p><div className="about-row"><span>{appLanguage === 'de' ? 'Installiert' : 'Installed'}</span><strong>v{APP_VERSION}</strong></div>{updateInfo && <div className="about-row"><span>{appLanguage === 'de' ? 'Update-Status' : 'Update status'}</span><strong>{updateInfo.status === 'available' ? (appLanguage === 'de' ? 'Neue Version verfügbar' : 'Update available') : updateInfo.status === 'current' ? (appLanguage === 'de' ? 'Aktuell' : 'Up to date') : updateInfo.status === 'error' ? 'Fehler' : (appLanguage === 'de' ? 'Nicht verfügbar' : 'Unavailable')}</strong></div>}{updateInfo?.status === 'available' && <div className="update-notice"><strong>3D-Maker {updateInfo.latestVersion}</strong><p>{updateInfo.notes?.slice(0, 800) || (appLanguage === 'de' ? 'Eine neue Version steht bereit.' : 'A new release is available.')}</p><button className="primary" onClick={() => void window.threeDMakerUpdates?.openRelease()}>{appLanguage === 'de' ? 'Update herunterladen' : 'Download update'}</button></div>}{updateInfo?.message && <p className="creator-hint">{updateInfo.message}</p>}<button disabled={updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? (appLanguage === 'de' ? 'Prüfe ...' : 'Checking ...') : (appLanguage === 'de' ? 'Jetzt nach Updates suchen' : 'Check for updates')}</button></section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
+    {settingsOpen && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSettingsOpen(false); }}><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · v{APP_VERSION}</span><h2 id="settings-title">{t("settings")}</h2></div><button className="settings-close" onClick={() => setSettingsOpen(false)} aria-label={t("close")}>×</button></header><div className="settings-content"><section className="settings-section"><h3>{t("appearance")}</h3><label>{t("theme")}<select value={appTheme} onChange={e => setAppTheme(e.target.value as AppTheme)}><option value="dark">{t("dark")}</option><option value="light">{t("light")}</option></select></label></section><section className="settings-section"><h3>{t("language")}</h3><label>{t("language")}<select value={appLanguage} onChange={e => setAppLanguage(e.target.value as AppLanguage)}><option value="de">Deutsch</option><option value="en">English</option></select></label></section><section className="settings-section settings-updates"><h3>{appLanguage === 'de' ? 'Programm-Updates' : 'Software updates'}</h3><p className="creator-hint">{appLanguage === 'de' ? 'Automatische Prüfung beim Start und alle 6 Stunden. Ein Update wird angezeigt, aber nie ohne Zustimmung installiert.' : 'Automatic check on startup and every 6 hours. Updates are never installed without your consent.'}</p><div className="about-row"><span>{appLanguage === 'de' ? 'Installiert' : 'Installed'}</span><strong>v{APP_VERSION}</strong></div>{updateInfo && <div className="about-row"><span>{appLanguage === 'de' ? 'Update-Status' : 'Update status'}</span><strong>{updateInfo.status === 'available' ? (appLanguage === 'de' ? 'Neue Version verfügbar' : 'Update available') : updateInfo.status === 'current' ? (appLanguage === 'de' ? 'Aktuell' : 'Up to date') : updateInfo.status === 'error' ? 'Fehler' : (appLanguage === 'de' ? 'Nicht verfügbar' : 'Unavailable')}</strong></div>}{updateInfo?.status === 'available' && <div className="update-notice"><strong>3D-Maker {updateInfo.latestVersion}</strong><p>{updateInfo.notes?.slice(0, 800) || (appLanguage === 'de' ? 'Eine neue Version steht bereit.' : 'A new release is available.')}</p><button className="primary" disabled={updateBusy} onClick={()=>void downloadUpdate()}>{appLanguage === 'de' ? 'Update herunterladen' : 'Download update'}</button></div>}{updateInfo?.message && <p className="creator-hint">{updateInfo.message}</p>}<button disabled={updateBusy} onClick={() => void checkForUpdates()}>{updateBusy ? (appLanguage === 'de' ? 'Prüfe ...' : 'Checking ...') : (appLanguage === 'de' ? 'Jetzt nach Updates suchen' : 'Check for updates')}</button></section><section className="settings-section settings-files"><h3>{appLanguage==='de'?'Dateien & Standardprogramm':'Files & default app'}</h3>
+      {window.threeDMakerFiles ? <button disabled={fileSettingsBusy || busy} onClick={()=>void desktopAction('pick')}>{appLanguage==='de'?'Datei öffnen …':'Open file …'}</button> : <label className="button">{appLanguage==='de'?'Datei öffnen …':'Open file …'}<input hidden type="file" accept=".3dmaker,.json,.stl,.obj" onChange={event=>{handleDroppedFiles(event.target.files??[]);setSettingsOpen(false);}} /></label>}
+      <p className="creator-hint">{appLanguage==='de'?'Projekte (.3dmaker) sowie STL- und OBJ-Dateien öffnen. Alte .3dmaker.json-Projekte bleiben lesbar.':'Open projects (.3dmaker), STL and OBJ. Legacy .3dmaker.json projects remain readable.'}</p>
+      {window.threeDMakerFiles?.isWindows ? <><p className="creator-hint">{appLanguage==='de'?'Die EXE zuerst an einem dauerhaften Ort ablegen. Danach Dateitypen registrieren und in Windows 3D-Maker als Standard auswählen. Nach Verschieben oder Ersetzen durch eine anders benannte EXE erneut registrieren.':'Keep the EXE in a permanent location, register file types, then choose 3D-Maker in Windows default apps. Register again after moving or renaming the EXE.'}</p><div className="selection-tools"><button disabled={fileSettingsBusy} onClick={()=>void desktopAction('register')}>{appLanguage==='de'?'Dateitypen registrieren':'Register file types'}</button><button disabled={fileSettingsBusy} onClick={()=>void desktopAction('defaults')}>{appLanguage==='de'?'Windows-Standardprogramme öffnen':'Open Windows default apps'}</button></div></> : <p className="creator-hint">{appLanguage==='de'?'Windows-Dateizuordnungen sind in der portablen Windows-App verfügbar.':'Windows file associations are available in the portable Windows app.'}</p>}
+      {fileSettingsMessage && <p role="status" className="creator-hint">{fileSettingsMessage}</p>}
+      </section><section className="settings-section settings-about"><h3>{t("info")}</h3><div className="about-row"><span>{t("version")}</span><strong>3D-Maker v{APP_VERSION}</strong></div><div className="about-row"><span>{t("contact")}</span><strong>Shad3pi</strong></div><p>{t("credit")}</p><a href="https://github.com/Inrouder/3D-Maker" target="_blank" rel="noreferrer">↗ {t("repository")}</a></section></div><footer className="settings-footer"><button className="primary" onClick={() => setSettingsOpen(false)}>{t("close")}</button></footer></section></div>}
 
     {creatorMode && <div className="settings-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setCreatorMode(null); }}><section className="settings-dialog creator-dialog" role="dialog" aria-modal="true" aria-labelledby="creator-title"><header className="settings-heading"><div><span className="settings-kicker">3DMAKER · PARAMETRISCHE FORM</span><h2 id="creator-title">{creatorMode === 'text' ? '3D-Text erstellen' : creatorMode === 'gear' ? 'Zahnrad erstellen' : 'Gewinde erstellen'}</h2></div><button className="settings-close" onClick={() => setCreatorMode(null)} aria-label="Schließen">×</button></header><div className="settings-content">
       {creatorMode === 'text' && <><label className="creator-field">Text<input autoFocus maxLength={100} value={textValue} onChange={e => setTextValue(e.target.value)} placeholder="Dein Text" /></label><label className="creator-field">Buchstabenhöhe (mm)<input type="number" min="2" max="200" step="1" value={textSize} onChange={e => setTextSize(Number(e.target.value))} /></label><label className="creator-field">Extrusionstiefe (mm)<input type="number" min="0.5" max="100" step="0.5" value={textDepth} onChange={e => setTextDepth(Number(e.target.value))} /></label><p className="creator-hint">Erzeugt echte extrudierte 3D-Geometrie, keine Textur.</p></>}
@@ -1113,7 +1168,7 @@ export default function App() {
         <button onClick={undo} disabled={undoStackRef.current.length === 0} title="Rückgängig (Strg+Z)">{t("undo")}</button>
         <button onClick={redo} disabled={redoStackRef.current.length === 0} title="Wiederholen (Strg+R)">{t("redo")}</button>
         <button onClick={saveProject} title="Projekt speichern (Strg+S)">{t("save")}</button>
-        <label className="button secondary">{t("open")}<input hidden type="file" accept=".json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
+        <label className="button secondary">{t("open")}<input hidden type="file" accept=".3dmaker,.json,.3dmaker.json" onChange={e => openProject(e.target.files?.[0])} /></label>
         <label className="button secondary">{t("importMesh")}<input hidden type="file" accept=".stl,.obj" onChange={e => handleDroppedFiles(e.target.files ?? [])} /></label>
         <button className="primary" onClick={() => exportStl()}>{t("export")}</button>
       </div>
@@ -1215,7 +1270,7 @@ export default function App() {
           <div className="actual-dimensions"><span>LOKALE MAẞE INKL. SKALIERUNG</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
           <div className="selection-tools"><button disabled={busy || selectedIds.length !== 1} onClick={repairSelected} title="Doppelte/degenerierte Flächen entfernen und Normalen ausrichten; Löcher werden gemeldet">Mesh reparieren</button><button onClick={()=>exportStl(true)}>Auswahl als STL</button><button onClick={()=>{
             const selectedObjects=objects.filter(o=>selectedIds.includes(o.id)).map(o=>({...o,groupId:undefined}));
-            downloadFile('Auswahl.3dmaker.json',JSON.stringify({format:'3dmaker-project',version:1,name:'Auswahl',objects:selectedObjects}), 'application/json');
+            downloadFile('Auswahl.3dmaker',JSON.stringify({format:'3dmaker-project',version:1,name:'Auswahl',objects:selectedObjects}), 'application/json');
           }}>Auswahl als Projekt</button></div><div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>{t("noObject")}</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
