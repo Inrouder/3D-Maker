@@ -54,7 +54,18 @@ try {
   await page.locator('.object-row').waitFor({timeout:60000});
   await page.getByRole('button',{name:'Mesh reparieren',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Repariert:'),null,{timeout:60000});
-  console.log('PASS: packaged Windows renderer, startup project, registry launcher, second-instance project, STL import worker and repair worker.');
+  const openMeshFile=path.join(temp,'open-mesh.stl');
+  const openMesh=new THREE.Mesh(new THREE.CylinderGeometry(10,10,25,16,1,true));
+  const openStl=new STLExporter().parse(openMesh,{binary:true});await writeFile(openMeshFile,Buffer.from(openStl.buffer));openMesh.geometry.dispose();
+  await sendFile(openMeshFile);
+  await page.waitForFunction(()=>document.querySelectorAll('.object-row').length===2);
+  await page.getByRole('button',{name:'Löcher markieren & schließen',exact:true}).click();
+  await page.locator('.hole-list button').first().waitFor({timeout:60000});
+  assert.equal(await page.locator('.hole-list button').count(),2);
+  await page.locator('.hole-list button').first().click();
+  await page.getByRole('button',{name:'Verschluss übernehmen',exact:true}).click({timeout:60000});
+  await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Markierte Öffnung geschlossen'));
+  console.log('PASS: packaged Windows renderer, startup project, registry launcher, second-instance project, STL import, repair and selective hole-fill workers.');
 }finally{
   await browser?.close().catch(()=>{});
   if(child && child.exitCode===null){try{execFileSync('taskkill',['/pid',String(child.pid),'/T','/F'],{stdio:'ignore'});}catch{}}
