@@ -20,7 +20,7 @@ const mesh=new THREE.Mesh(new THREE.BoxGeometry(10,12,14));
 const stl=new STLExporter().parse(mesh,{binary:true});await writeFile(meshFile,Buffer.from(stl.buffer));mesh.geometry.dispose();
 const args=[`--user-data-dir=${userData}`,'--use-angle=swiftshader','--enable-unsafe-swiftshader'];
 const options={env:{...process.env,PORTABLE_EXECUTABLE_FILE:launcher},windowsHide:true};
-let browser, child;
+let browser, child, page;
 try {
   child=spawn(executable,[...args,'--remote-debugging-port=9222','--remote-debugging-address=127.0.0.1',first],options);
   child.on('error',error=>console.error(error));
@@ -32,16 +32,20 @@ try {
   }
   assert.ok(ready,'Electron remote-debugging endpoint did not start.');
   browser=await chromium.connectOverCDP('http://127.0.0.1:9222');
-  const page=browser.contexts()[0].pages()[0];
-  assert.ok(page,'Electron window must exist');page.on('dialog',dialog=>dialog.accept());
+  page=browser.contexts()[0].pages()[0];
+  assert.ok(page,'Electron window must exist');page.on('dialog',dialog=>{void dialog.accept().catch(()=>{});});
+  page.on('pageerror',error=>console.error('RENDERER ERROR',error.message));
+  page.on('console',message=>{if(message.type()==='error')console.error('RENDERER CONSOLE',message.text());});
   await page.locator('canvas').waitFor({timeout:60000});
   await page.getByLabel('Projektname').waitFor();
   await page.waitForFunction(()=>document.querySelector('[aria-label="Projektname"]')?.value==='Startup project');
+  console.log('PASS startup project');
   await page.getByRole('button',{name:'Einstellungen',exact:true}).click();
   await page.getByRole('button',{name:'Dateitypen registrieren',exact:true}).click();
   await page.getByRole('status').filter({hasText:'registriert'}).waitFor();
   const registry=execFileSync('reg.exe',['query','HKCU\\Software\\Classes\\Inrouder.3DMaker.3dmaker\\shell\\open\\command','/ve'],{encoding:'utf8'});
   assert.ok(registry.includes(`"${launcher}" "%1"`),'Registry must use the persistent portable launcher');
+  console.log('PASS registry');
   await page.keyboard.press('Escape');
   const sendFile=file=>new Promise((resolve,reject)=>{
     const other=spawn(executable,[...args,file],options);
@@ -50,22 +54,33 @@ try {
   });
   await sendFile(second);
   await page.waitForFunction(()=>document.querySelector('[aria-label="Projektname"]')?.value==='Second instance project');
+  console.log('PASS second-instance project');
   await sendFile(meshFile);
   await page.locator('.object-row').waitFor({timeout:60000});
   await page.getByRole('button',{name:'Mesh reparieren',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Repariert:'),null,{timeout:60000});
+  console.log('PASS import and repair');
   const openMeshFile=path.join(temp,'open-mesh.stl');
   const openMesh=new THREE.Mesh(new THREE.CylinderGeometry(10,10,25,16,1,true));
   const openStl=new STLExporter().parse(openMesh,{binary:true});await writeFile(openMeshFile,Buffer.from(openStl.buffer));openMesh.geometry.dispose();
   await sendFile(openMeshFile);
   await page.waitForFunction(()=>document.querySelectorAll('.object-row').length===2);
+  console.log('PASS open mesh import');
   await page.getByRole('button',{name:'Löcher markieren & schließen',exact:true}).click();
   await page.locator('.hole-list button').first().waitFor({timeout:60000});
   assert.equal(await page.locator('.hole-list button').count(),2);
+  console.log('PASS hole detection');
   await page.locator('.hole-list button').first().click();
   await page.getByRole('button',{name:'Verschluss übernehmen',exact:true}).click({timeout:60000});
   await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Markierte Öffnung geschlossen'));
   console.log('PASS: packaged Windows renderer, startup project, registry launcher, second-instance project, STL import, repair and selective hole-fill workers.');
+}catch(error){
+  console.error('SMOKE FAILURE',error);
+  if(page){
+    console.error('STATUS',await page.locator('.statusbar').textContent({timeout:3000}).catch(()=>'<unavailable>'));
+    console.error('BODY',await page.locator('body').innerText({timeout:3000}).then(text=>text.slice(-7000)).catch(()=>'<unavailable>'));
+  }
+  throw error;
 }finally{
   await browser?.close().catch(()=>{});
   if(child && child.exitCode===null){try{execFileSync('taskkill',['/pid',String(child.pid),'/T','/F'],{stdio:'ignore'});}catch{}}
