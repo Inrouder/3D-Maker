@@ -4,7 +4,8 @@ type Data = NonNullable<ModelObject['geometryData']>;
 export type Hole = { id:number; vertices:number[]; points:number[]; perimeter:number };
 const edgeKey=(a:number,b:number)=>a<b?`${a},${b}`:`${b},${a}`;
 
-export function findHoles(data:Data) {
+export function findHoles(data:Data,discardDegenerate=false) {
+  let removedFaces=0;
   const positions:number[]=[],indices:number[]=[],weld=new Map<string,number>();
   const remap:number[]=[];
   for(let i=0;i<data.positions.length;i+=3){
@@ -16,6 +17,11 @@ export function findHoles(data:Data) {
   const source=data.indices??Array.from({length:remap.length},(_,i)=>i);
   if(source.length%3)throw new Error('Ungültige Dreiecksanzahl.');
   for(const id of source){if(!Number.isInteger(id)||id<0||id>=remap.length)throw new Error('Ungültiger Mesh-Index.');indices.push(remap[id]);}
+  if(discardDegenerate){
+    const kept:number[]=[];
+    for(let i=0;i<indices.length;i+=3){if(new Set(indices.slice(i,i+3)).size<3)removedFaces++;else kept.push(indices[i],indices[i+1],indices[i+2]);}
+    indices.length=0;for(const id of kept)indices.push(id);
+  }
   const edges=new Map<string,{a:number;b:number;count:number}>();
   for(let i=0;i<indices.length;i+=3){
     const triangle=indices.slice(i,i+3);if(new Set(triangle).size<3)throw new Error('Degenerierte Flächen: Bitte zuerst Mesh reparieren.');
@@ -44,7 +50,7 @@ export function findHoles(data:Data) {
     for(let j=0;j<vertices.length;j++)perimeter+=new THREE.Vector3(...points.slice(j*3,j*3+3) as [number,number,number]).distanceTo(new THREE.Vector3(...points.slice(((j+1)%vertices.length)*3,((j+1)%vertices.length)*3+3) as [number,number,number]));
     holes.push({id:holes.length,vertices,points,perimeter});
   }
-  return {geometryData:{positions,indices},holes,ambiguous,nonManifoldEdges:[...edges.values()].filter(e=>e.count>2).length};
+  return {geometryData:{positions,indices},removedFaces,holes,ambiguous,nonManifoldEdges:[...edges.values()].filter(e=>e.count>2).length};
 }
 
 export function fillHole(data:Data,holeId:number,bulge=0) {

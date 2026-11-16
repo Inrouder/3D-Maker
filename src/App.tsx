@@ -16,7 +16,7 @@ import HoleTool from './HoleTool';
 import SolidPatchTool from './SolidPatchTool';
 type CreatorMode = 'text' | 'gear' | 'thread';
 
-const APP_VERSION = '0.1.13';
+const APP_VERSION = '0.1.14';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
 type FileBridge = {

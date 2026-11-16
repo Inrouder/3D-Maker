@@ -1,3 +1,4 @@
+import {conformBoundaries} from './conform-boundaries';
 import * as THREE from 'three';
 import type { ModelObject } from './model';
 import { findHoles, fillHole } from './hole-fill';
@@ -6,8 +7,11 @@ export type MeshData=NonNullable<ModelObject['geometryData']>;
 const edgeKey=(a:number,b:number,n:number)=>Math.min(a,b)*n+Math.max(a,b);
 
 export function prepareVolume(data:MeshData,allowRepair=true) {
-  let indexed=findHoles(data).geometryData;
-  let removedFaces=0,repairCaps=0;
+  const initial=findHoles(data,allowRepair);
+  const conformed=allowRepair?conformBoundaries(initial.geometryData):{geometryData:initial.geometryData,stitchedEdges:0,removedFaces:0};
+  let indexed=conformed.geometryData;
+  let removedFaces=initial.removedFaces+conformed.removedFaces,repairCaps=0;
+  if(initial.removedFaces>Math.max(100,(indexed.indices!.length/3+initial.removedFaces)*.01))throw new Error('Zu viele degenerierte Flächen: automatische lokale Bereinigung abgebrochen. Original bleibt unverändert.');
   const initialFaces=indexed.indices!.length/3;
   const bounds=new THREE.Box3();for(let i=0;i<indexed.positions.length;i+=3)bounds.expandByPoint(new THREE.Vector3(...indexed.positions.slice(i,i+3) as [number,number,number]));
   const maxRepairPerimeter=bounds.getSize(new THREE.Vector3()).length()*.12;
@@ -27,7 +31,7 @@ export function prepareVolume(data:MeshData,allowRepair=true) {
     if(!allowRepair)throw new Error('Das Mesh enthält Topologiefehler. Kleine Meshfehler bereinigen aktivieren oder das Modell vorher reparieren.');
     const kept:number[]=[];
     for(let i=0;i<ids.length;i+=3){if(bad.has(ids[i])||bad.has(ids[i+1])||bad.has(ids[i+2]))removedFaces++;else kept.push(ids[i],ids[i+1],ids[i+2]);}
-    if(removedFaces>Math.max(100,initialFaces*.01))throw new Error('Zu viele fehlerhafte Flächen: automatische lokale Bereinigung abgebrochen. Original bleibt unverändert.');
+    if(removedFaces-conformed.removedFaces>Math.max(100,initialFaces*.01))throw new Error('Zu viele fehlerhafte Flächen: automatische lokale Bereinigung abgebrochen. Original bleibt unverändert.');
     indexed={positions:indexed.positions,indices:kept};
   }
   let analysis=findHoles(indexed);
@@ -68,7 +72,7 @@ export function prepareVolume(data:MeshData,allowRepair=true) {
   }
   analysis=findHoles(indexed);
   if(analysis.holes.length||analysis.ambiguous||analysis.nonManifoldEdges)throw new Error(`Lokale Bereinigung liefert keinen geschlossenen Körper (${analysis.holes.length} Ränder, ${analysis.ambiguous} mehrdeutig, ${analysis.nonManifoldEdges} nicht-manifold).`);
-  return {geometryData:analysis.geometryData,removedFaces,repairCaps,maxRepairPerimeter};
+  return {geometryData:analysis.geometryData,removedFaces,repairCaps,stitchedEdges:conformed.stitchedEdges,maxRepairPerimeter};
 }
 
 export function makePatch(points:number[][],viewpoint:number[],depth:number,bulge:number,overlap=.15,margin=.8) {

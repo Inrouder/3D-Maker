@@ -4,14 +4,14 @@ import wasmUrl from 'manifold-3d/manifold.wasm?url&inline';
 import {prepareVolume,makePatch,toSolid,unitePatch} from './solid-patch';
 import type {MeshData} from './solid-patch';
 let lib:ManifoldToplevel,base:Manifold|undefined,result:MeshData|undefined;
-let repair:{removedFaces:number;repairCaps:number}|undefined;
+let repair:{removedFaces:number;repairCaps:number;stitchedEdges:number}|undefined;
 self.onmessage=async event=>{
   const {action,id}=event.data;
   try{
     if(action==='init'){
       self.postMessage({kind:'progress',message:'Volumen-Geometrie wird vorbereitet …'});
       lib=await Module({locateFile:()=>wasmUrl});lib.setup();
-      const prepared=prepareVolume(event.data.data,event.data.allowRepair);repair={removedFaces:prepared.removedFaces,repairCaps:prepared.repairCaps};
+      const prepared=prepareVolume(event.data.data,event.data.allowRepair);repair={removedFaces:prepared.removedFaces,repairCaps:prepared.repairCaps,stitchedEdges:prepared.stitchedEdges};
       base?.delete();base=toSolid(lib,prepared.geometryData);
       if(base.status()!=='NoError' || base.isEmpty())throw new Error('Das Modell lässt sich nicht als geschlossenes Volumen verarbeiten.');
       self.postMessage({kind:'ready',...repair,genus:base.genus(),volume:base.volume()});
@@ -29,5 +29,5 @@ self.onmessage=async event=>{
       });
       self.postMessage({kind:'apply',id,geometryData:result,dimensions});
     }
-  }catch(error){self.postMessage({kind:'error',id,message:error instanceof Error?error.message:'Verschließen fehlgeschlagen.'});}
+  }catch(error){self.postMessage({kind:'error',action,id,message:error instanceof Error?error.message:'Verschließen fehlgeschlagen.'});}
 };

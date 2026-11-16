@@ -3,7 +3,7 @@
 **Ein lokaler 3D-Modellierer für Windows und den Browser.** Entwerfe und bearbeite 3D-Objekte in einer übersichtlichen Arbeitsfläche – ohne Benutzerkonto, Cloudzwang, Werbung oder Slicer.
 
 [![Build](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml/badge.svg)](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/Version-0.1.13-19b5a5)
+![Version](https://img.shields.io/badge/Version-0.1.14-19b5a5)
 ![Windows](https://img.shields.io/badge/Windows-Portable-2767bb)
 ![Status](https://img.shields.io/badge/Status-Experimentell-ef9d38)
 
@@ -104,6 +104,10 @@ Jedes Release enthält die versionierte EXE, den festen Namen `3D-Maker-Portable
 React 19 · TypeScript · Three.js · Vite · Electron · electron-builder · GitHub Actions.
 
 3D-Maker speichert Projekte lokal und benötigt für die eigentliche Modellierung keine Netzwerkverbindung. Eine Verbindung zu GitHub wird ausschließlich für optionale Updateprüfungen oder das manuelle Öffnen des Repositorys verwendet.
+
+## Änderungen 0.1.14
+
+[Gesicherte Modellvorbereitung und verständliche Vorschau-Freigabe](docs/CHANGES_0.1.14.md)
 
 ## Änderungen 0.1.13
 

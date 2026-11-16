@@ -71,3 +71,35 @@ test('closing one of two passages leaves the other opening in the cross section'
     }finally{section.delete();solid.delete();}
   }finally{base.delete();cut.delete();box.delete();a.delete();b.delete();}
 });
+test('local preparation removes collapsed triangles only when repair is enabled',async()=>{
+  const geometry=new THREE.BoxGeometry(10,10,10).toNonIndexed();
+  const positions=Array.from(geometry.getAttribute('position').array);geometry.dispose();
+  // Distinct source vertices collapse under the same weld used by boundary analysis.
+  const damaged={positions:[...positions,0,0,0,0.0000001,0,0,1,0,0],indices:null};
+  assert.throws(()=>prepareVolume(damaged,false),/Degenerierte/);
+  const result=prepareVolume(damaged,true);
+  assert.equal(result.removedFaces,1);assert.equal(result.repairCaps,0);
+  const lib=await libPromise,solid=toSolid(lib,result.geometryData);
+  try{assert.equal(solid.status(),'NoError');assert.ok(Math.abs(solid.volume()-1000)<1e-6);}finally{solid.delete();}
+  assert.equal(damaged.positions.length,positions.length+9);
+});
+test('a CSG countersunk bore becomes a valid volume and can be closed',async()=>{
+  const {Brush,Evaluator,SUBTRACTION}=await import('three-bvh-csg');
+  const lib=await libPromise;
+  for(const tilt of [0,.001]){
+    const box=new Brush(new THREE.BoxGeometry(30,12,30)),cutter=new Brush(new THREE.CylinderGeometry(9,4,20,32));
+    cutter.rotation.z=tilt*Math.PI/180;box.updateMatrixWorld();cutter.updateMatrixWorld();
+    const geometry=new Evaluator().evaluate(box,cutter,SUBTRACTION).geometry;
+    const data={positions:Array.from(geometry.getAttribute('position').array),indices:geometry.index?Array.from(geometry.index.array):null};
+    const prepared=prepareVolume(data);assert.ok(prepared.stitchedEdges>0);
+    const base=toSolid(lib,prepared.geometryData);
+    try{
+      assert.equal(base.status(),'NoError');assert.equal(base.genus(),1);
+      const expected=10800-Math.PI*12/3*(8*8+8*5+5*5);
+      assert.ok(Math.abs(base.volume()-expected)<25,'CSG volume is preserved within polygonal circle approximation');
+      const points=Array.from({length:32},(_,i)=>{const a=i*Math.PI*2/32;return [9*Math.cos(a),6,9*Math.sin(a)];});
+      const result=unitePatch(lib,base,makePatch(points,[0,100,0],1.5,0).geometryData);
+      assert.equal(result.genusAfter,0);assert.ok(result.volumeAdded>0);
+    }finally{base.delete();geometry.dispose();box.geometry.dispose();cutter.geometry.dispose();}
+  }
+});
