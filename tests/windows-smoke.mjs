@@ -1,4 +1,4 @@
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
@@ -66,7 +66,7 @@ try {
   assert.equal(await page.locator('.axis-focus').getAttribute('data-axis'),'Z');
   await page.getByRole('button',{name:'Proportional skalieren',exact:true}).click();
   await dimensions.nth(2).fill('28');await dimensions.nth(2).press('Enter');
-  assert.equal(await dimensions.nth(0).inputValue(),'20');assert.equal(await dimensions.nth(1).inputValue(),'24');assert.equal(await dimensions.nth(2).inputValue(),'28');
+  await expect(dimensions.nth(0)).toHaveValue('20');await expect(dimensions.nth(1)).toHaveValue('24');await expect(dimensions.nth(2)).toHaveValue('28');
   await page.getByRole('button',{name:'Proportional skalieren',exact:true}).click();
   console.log('PASS Z-up compass, focused-axis highlight and proportional dimensions');
   const openMeshFile=path.join(temp,'open-mesh.stl');

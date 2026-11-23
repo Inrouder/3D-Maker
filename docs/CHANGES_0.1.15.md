@@ -36,3 +36,5 @@ Klick oder Tastaturfokus in ein X-/Y-/Z-Feld hebt Feld und Achse mit derselben F
 - 26 Oberflächentests: Achsenkompass, Fokus-Hervorhebung, Boden Z=0, STL-Ausgabe, erneutes Öffnen ohne zweite Migration, proportionale Zahlenwerte, ungleiche Ausgangsskalierung, Rückgängig und einzelner Skalierungsgriff. Ein Gruppentest prüft zusätzlich, dass Abstände und Körpergrößen gemeinsam wachsen. Zusätzliche Prüfung der Schnitte entlang Welt-X, -Y und -Z an einem gedrehten Objekt.
 - Bestehende Prüfungen für große STL-Dateien, Zwischenablage, Meshreparatur und beide Verschlusswerkzeuge bleiben enthalten; Kamera und Testprojektionen sind auf Z-up angepasst.
 - Der native Windows-Smoke-Test prüft zusätzlich Kompass, Feldhervorhebung und proportionale Maße in der gebauten Desktop-App. Veröffentlichung erfolgt erst nach erfolgreichem Windows-Test.
+
+Der erste Windows-Lauf las nach dem Bestätigen des Z-Werts noch den alten Entwurf eines Eingabefelds, obwohl das Modell bereits die korrekten proportionalen Maße anzeigte. Der Smoke-Test wartet jetzt gezielt auf die aktualisierten Feldwerte statt sie unmittelbar auszulesen. Die App-Geometrie wurde dafür nicht verändert.
