@@ -34,9 +34,9 @@ test('preview, bulge, apply only one hole, undo/redo and project persistence',as
 test('lasso chooses only the enclosed opening and does not move the object',async({page})=>{
   const data=await load(page);await page.getByRole('button',{name:'Umkreisen',exact:true}).click();
   const rect=(await page.locator('canvas').boundingBox())!;
-  const camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.position.set(110,100,150);camera.lookAt(0,0,0);camera.updateMatrixWorld();
+  const camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.up.set(0,0,1);camera.position.set(150,110,100);camera.lookAt(0,0,0);camera.updateMatrixWorld();
   const hole=findHoles(data.objects[0].geometryData).holes[0],points:THREE.Vector3[]=[];
-  for(let i=0;i<hole.points.length;i+=3)points.push(new THREE.Vector3(hole.points[i],hole.points[i+1],hole.points[i+2]).project(camera));
+  for(let i=0;i<hole.points.length;i+=3)points.push(new THREE.Vector3(hole.points[i+2],hole.points[i],hole.points[i+1]).project(camera));
   const x=points.map(p=>rect.x+(p.x+1)*rect.width/2),y=points.map(p=>rect.y+(1-p.y)*rect.height/2);
   const left=Math.min(...x)-12,right=Math.max(...x)+12,top=Math.min(...y)-12,bottom=Math.max(...y)+12;
   await page.mouse.move(left,top);await page.mouse.down();

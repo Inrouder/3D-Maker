@@ -60,6 +60,15 @@ try {
   await page.getByRole('button',{name:'Mesh reparieren',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.statusbar')?.textContent?.includes('Repariert:'),null,{timeout:60000});
   console.log('PASS import and repair');
+  assert.equal(await page.getByRole('img',{name:'Weltachsen: X und Y Bodenebene, Z nach oben'}).count(),1);
+  const dimensions=page.locator('.vector-fields').nth(2).locator('input');
+  await dimensions.nth(2).focus();
+  assert.equal(await page.locator('.axis-focus').getAttribute('data-axis'),'Z');
+  await page.getByRole('button',{name:'Proportional skalieren',exact:true}).click();
+  await dimensions.nth(2).fill('28');await dimensions.nth(2).press('Enter');
+  assert.equal(await dimensions.nth(0).inputValue(),'20');assert.equal(await dimensions.nth(1).inputValue(),'24');assert.equal(await dimensions.nth(2).inputValue(),'28');
+  await page.getByRole('button',{name:'Proportional skalieren',exact:true}).click();
+  console.log('PASS Z-up compass, focused-axis highlight and proportional dimensions');
   const openMeshFile=path.join(temp,'open-mesh.stl');
   const openMesh=new THREE.Mesh(new THREE.CylinderGeometry(10,10,25,16,1,true));
   const openStl=new STLExporter().parse(openMesh,{binary:true});await writeFile(openMeshFile,Buffer.from(openStl.buffer));openMesh.geometry.dispose();
@@ -81,7 +90,7 @@ try {
   await page.getByRole('button',{name:'Armloch / Durchgang schließen',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('.solid-tool [role=status]')?.textContent?.includes('Bereit.'),null,{timeout:60000});
   await page.getByRole('button',{name:'Werkzeug einklappen',exact:true}).click();
-  const rect=await page.locator('canvas').boundingBox(),camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.position.set(110,100,150);camera.lookAt(0,0,0);camera.updateMatrixWorld();
+  const rect=await page.locator('canvas').boundingBox(),camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.up.set(0,0,1);camera.position.set(150,110,100);camera.lookAt(0,0,0);camera.updateMatrixWorld();
   const screen=Array.from({length:32},(_,i)=>{const angle=i*Math.PI*2/32,p=new THREE.Vector3(Math.cos(angle)*27,Math.sin(angle)*27,2).project(camera);return [rect.x+(p.x+1)*rect.width/2,rect.y+(1-p.y)*rect.height/2];});
   await page.mouse.move(...screen[0]);await page.mouse.down();for(const p of [...screen.slice(1),screen[0]])await page.mouse.move(...p,{steps:2});await page.mouse.up();
   await page.getByRole('button',{name:'Werkzeug ausklappen',exact:true}).click();

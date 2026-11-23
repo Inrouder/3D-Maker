@@ -1,3 +1,4 @@
+import {migrateLegacyObject} from './coordinates';
 import * as THREE from 'three';
 
 export type ShapeType = 'box' | 'cylinder' | 'sphere' | 'cone' | 'custom' | 'text' | 'gear' | 'thread';
@@ -39,14 +40,14 @@ export function geometryFor(obj: ModelObject): THREE.BufferGeometry {
   const [x, y, z] = obj.dimensions;
   let g: THREE.BufferGeometry;
   switch (obj.type) {
-    case 'cylinder': g = new THREE.CylinderGeometry(x / 2, x / 2, y, 64); break;
+    case 'cylinder': g = new THREE.CylinderGeometry(x / 2, x / 2, z, 64).rotateX(Math.PI / 2); break;
     case 'sphere': g = new THREE.SphereGeometry(x / 2, 48, 32); break;
-    case 'cone': g = new THREE.ConeGeometry(x / 2, y, 64); break;
+    case 'cone': g = new THREE.ConeGeometry(x / 2, z, 64).rotateX(Math.PI / 2); break;
     default: g = new THREE.BoxGeometry(x, y, z);
   }
   // Primitive dimensions describe local X/Y/Z, independent of rotation.
   if (obj.type === 'sphere') g.scale(1, y / x, z / x);
-  else if (obj.type === 'cylinder' || obj.type === 'cone') g.scale(1, 1, z / x);
+  else if (obj.type === 'cylinder' || obj.type === 'cone') g.scale(1, y / x, 1);
   g.computeVertexNormals();
   return g;
 }
@@ -56,7 +57,7 @@ export function validateProject(data: unknown): { name?: string; objects: ModelO
   const fail = (): never => { throw new Error('Ungültige Projektdatei: Objektwerte oder Geometrie fehlerhaft.'); };
   if (!data || typeof data !== 'object') return fail();
   const project = data as Record<string, unknown>;
-  if (project.format !== '3dmaker-project' || project.version !== 1 || !Array.isArray(project.objects)) return fail();
+  if (project.format !== '3dmaker-project' || (project.version !== 1 && project.version !== 2) || !Array.isArray(project.objects)) return fail();
   const ids = new Set<string>();
   for (const value of project.objects) {
     if (!value || typeof value !== 'object') return fail();
@@ -78,5 +79,15 @@ export function validateProject(data: unknown): { name?: string; objects: ModelO
       if (indices === null && positions.length % 9) return fail();
     } else if (['custom','text','gear','thread'].includes(obj.type)) return fail();
   }
-  return { name: typeof project.name === 'string' ? project.name : undefined, objects: project.objects };
+  return { name: typeof project.name === 'string' ? project.name : undefined, objects: project.version===1?project.objects.map((obj:ModelObject)=>{
+    if(obj.geometryData)return migrateLegacyObject(obj);
+    const [x,y,z]=obj.dimensions;
+    let g:THREE.BufferGeometry;
+    if(obj.type==='cylinder')g=new THREE.CylinderGeometry(x/2,x/2,y,64).scale(1,1,z/x);
+    else if(obj.type==='cone')g=new THREE.ConeGeometry(x/2,y,64).scale(1,1,z/x);
+    else if(obj.type==='sphere')g=new THREE.SphereGeometry(x/2,48,32).scale(1,y/x,z/x);
+    else g=new THREE.BoxGeometry(x,y,z);
+    const baked={...obj,geometryData:{positions:Array.from(g.getAttribute('position').array),indices:g.index?Array.from(g.index.array):null}};g.dispose();
+    return migrateLegacyObject(baked);
+  }):project.objects };
 }

@@ -17,7 +17,7 @@ test('rotated objects keep editable independent dimensions; tools remain reachab
   await page.getByRole('button',{name:/Schnittmodus beenden/}).click();
   await fields.nth(2).locator('input').nth(2).fill('23');
   await fields.nth(2).locator('input').nth(2).press('Enter');
-  await expect(page.locator('.actual-dimensions')).toContainText('62.50 mm × 12.00 mm × 23.00 mm');
+  await expect(page.locator('.actual-dimensions')).toContainText('62.50 mm × 40.00 mm × 23.00 mm');
   await page.getByRole('button',{name:/Ansicht zurücksetzen/}).scrollIntoViewIfNeeded();
   await expect(page.getByRole('button',{name:/Ansicht zurücksetzen/})).toBeInViewport();
   const overflow=await page.locator('.tools-scroll').evaluate(el=>el.scrollHeight>el.clientHeight);
@@ -48,14 +48,14 @@ test('settings blocks destructive shortcuts; save uses current project name', as
   expect((await download).suggestedFilename()).toBe('Neuer Name.3dmaker');
 });
 
-test('group member uses world Y when placed on ground', async ({page})=>{
+test('legacy group member uses world Z when placed on ground', async ({page})=>{
   await page.goto('/');
   const object={id:'a',name:'A',type:'box',position:[0,50,0],rotation:[0,0,0],scale:[1,1,1],dimensions:[10,10,10],color:'#43b6a8',groupId:'g'};
   const data={format:'3dmaker-project',version:1,objects:[object,{...object,id:'b',name:'B',position:[20,70,0]}]};
   await page.locator('input[type=file]').first().setInputFiles({name:'group.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(data))});
   await page.locator('.object-row').first().click({modifiers:['Shift']});
   await page.getByRole('button',{name:/Auf Boden setzen/}).click();
-  await expect(page.locator('.vector-fields').nth(0).locator('input').nth(1)).toHaveValue('5');
+  await expect(page.locator('.vector-fields').nth(0).locator('input').nth(2)).toHaveValue('5');
 });
 
 test('invalid saved language falls back without crashing',async({page})=>{

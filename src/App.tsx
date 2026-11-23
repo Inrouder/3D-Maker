@@ -1,3 +1,7 @@
+import {PROJECT_VERSION,resizeObject} from './coordinates';
+import OrientationCompass from './OrientationCompass';
+import AxisHighlight from './AxisHighlight';
+import type {ActiveField} from './AxisHighlight';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import * as THREE from 'three';
@@ -16,7 +20,7 @@ import HoleTool from './HoleTool';
 import SolidPatchTool from './SolidPatchTool';
 type CreatorMode = 'text' | 'gear' | 'thread';
 
-const APP_VERSION = '0.1.14';
+const APP_VERSION = '0.1.15';
 type UpdateResult = { status: 'available' | 'current' | 'unavailable' | 'error'; message?: string; currentVersion?: string; latestVersion?: string; title?: string; notes?: string; url?: string };
 type UpdateBridge = { check: () => Promise<UpdateResult>; openRelease: () => Promise<void> };
 type FileBridge = {
@@ -34,7 +38,7 @@ const uiText: Record<AppLanguage, Record<string, string>> = {
 const makeId = () => `obj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const initialObject = (): ModelObject => ({
   id: makeId(), name: 'Quader', type: 'box', position: [0, 0, 0],
-  rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8', dimensions: [40, 12, 40]
+  rotation: [0, 0, 0], scale: [1, 1, 1], color: '#43b6a8', dimensions: [40, 40, 12]
 });
 
 
@@ -106,6 +110,11 @@ export default function App() {
   const [threadLength, setThreadLength] = useState(20);
   const t = (key: string) => uiText[appLanguage][key] ?? key;
   const selectedIdRef = useRef<string | undefined>(undefined);
+  const [sceneReady,setSceneReady]=useState(false);
+  const [uniformScale,setUniformScale]=useState(false);
+  const uniformScaleRef=useRef(uniformScale);uniformScaleRef.current=uniformScale;
+  const scaleStartRef=useRef<{object:THREE.Object3D;scale:THREE.Vector3}|null>(null);
+  const [activeField,setActiveField]=useState<ActiveField|null>(null);
   const [transformMode, setTransformMode] = useState<'translate' | 'rotate' | 'scale'>('scale');
   const [liveTransform, setLiveTransform] = useState<{ dimensions: number[]; delta: number[]; rotation: number[] } | null>(null);
   const meshGroupRef = useRef<THREE.Group | null>(null);
@@ -151,7 +160,7 @@ export default function App() {
   useEffect(() => { localStorage.setItem('3dmaker-theme', appTheme); document.documentElement.dataset.theme = appTheme; }, [appTheme]);
   useEffect(() => { localStorage.setItem('3dmaker-language', appLanguage); document.documentElement.lang = appLanguage; }, [appLanguage]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('y');
+  const [cutAxis, setCutAxis] = useState<'x' | 'y' | 'z'>('z');
   const [cutPosition, setCutPosition] = useState(0);
   const [cutMode, setCutMode] = useState(false);
   const [solidObjectId,setSolidObjectId]=useState<string|null>(null);
@@ -161,6 +170,7 @@ export default function App() {
   const [status, setStatus] = useState('Bereit · Maße in mm');
   const [busy, setBusy] = useState(false);
   const [projectName, setProjectName] = useState('Unbenanntes Projekt');
+  useEffect(()=>{setActiveField(null);},[selectedIds,holeObjectId,solidObjectId,cutMode]);
   const selected = objects.find(o => o.id === selectedIds[0]);
   objectsRef.current = objects;
   selectedIdRef.current = selectedIds[0];
@@ -172,7 +182,7 @@ export default function App() {
     scene.background = new THREE.Color('#171a21');
     sceneRef.current = scene;
     const camera = new THREE.PerspectiveCamera(45, host.clientWidth / host.clientHeight, 0.1, 10000);
-    camera.position.set(110, 100, 150);
+    camera.up.set(0,0,1);camera.position.set(150,110,100);
     cameraRef.current = camera;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -183,12 +193,12 @@ export default function App() {
     host.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x343b49, 2.1));
+    const hemisphere=new THREE.HemisphereLight(0xffffff,0x343b49,2.1);hemisphere.position.set(0,0,1);scene.add(hemisphere);
     const keyLight = new THREE.DirectionalLight(0xffffff, 2.2);
-    keyLight.position.set(90, 150, 80);
+    keyLight.position.set(80,90,150);
     scene.add(keyLight);
     const grid = new THREE.GridHelper(240, 24, 0x5b6577, 0x303642);
-    scene.add(grid);
+    grid.rotation.x=Math.PI/2;scene.add(grid);
     const axes = new THREE.AxesHelper(35);
     scene.add(axes);
     const group = new THREE.Group();
@@ -208,7 +218,8 @@ export default function App() {
     cutHandleRef.current = cutHandle;
     transformControls.setSpace('local');
     scene.add(transformControls.getHelper());
-    transformControlsRef.current = transformControls;
+    transformControlsRef.current = transformControls;setSceneReady(true);
+    transformControls.addEventListener('mouseDown',()=>{const object=transformControls.object;if(object)scaleStartRef.current={object,scale:object.scale.clone()};setActiveField(null);});
     transformControls.addEventListener('dragging-changed', event => {
       controls.enabled = !event.value;
       if (!event.value) {
@@ -247,6 +258,12 @@ export default function App() {
         const axis = object.userData.cutAxis as 'x' | 'y' | 'z';
         setCutPosition(axis === 'x' ? object.position.x : axis === 'y' ? object.position.y : object.position.z);
         return;
+      }
+      const start=scaleStartRef.current;
+      if(object&&start?.object===object&&uniformScaleRef.current&&transformControls.mode==='scale'&&transformControls.dragging){
+        const axis=transformControls.axis||'X',index=axis.includes('X')?0:axis.includes('Y')?1:2;
+        const factor=Math.max(object.scale.getComponent(index)/start.scale.getComponent(index),...start.scale.toArray().map(v=>.01/v));
+        object.scale.copy(start.scale).multiplyScalar(factor);object.updateMatrixWorld(true);
       }
       const id = object?.userData.modelId as string | undefined;
       const model = objectsRef.current.find(obj => obj.id === id);
@@ -291,7 +308,7 @@ export default function App() {
         const dragObject = groupId ? visualGroupMapRef.current.get(groupId) : mesh;
         if (!dragObject) return;
         const worldPosition = dragObject.getWorldPosition(new THREE.Vector3());
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -worldPosition.y);
+        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -worldPosition.z);
         const startPoint = new THREE.Vector3();
         if (raycaster.ray.intersectPlane(plane, startPoint)) {
           dragRef.current = { id, pointerId: event.pointerId, startPoint, startPosition: dragObject.position.clone(), plane, ...(groupId ? { groupId } : {}) };
@@ -445,7 +462,7 @@ export default function App() {
           } else gizmo.detach();
         } else gizmo.detach();
       } else {
-        gizmo.setSpace('local');
+        gizmo.setSpace(transformMode==='translate'?'world':'local');
         gizmo.showX = true; gizmo.showY = true; gizmo.showZ = true;
         if (groupedSelection) { const pivot=visualGroupMapRef.current.get(selectedObjects[0].groupId!); if(pivot){gizmo.attach(pivot);gizmo.setMode(transformMode);}else gizmo.detach(); }
         else if (activeMesh) { gizmo.attach(activeMesh); gizmo.setMode(transformMode); } else gizmo.detach();
@@ -483,7 +500,7 @@ export default function App() {
   const addShape = (type: Exclude<ShapeType, 'text' | 'gear' | 'thread'>) => {
     const names: Record<Exclude<ShapeType, 'text' | 'gear' | 'thread'>, string> = { box: 'Quader', cylinder: 'Zylinder', sphere: 'Kugel', cone: 'Kegel', custom: 'Importiertes Mesh' };
     const dimensions: Record<Exclude<ShapeType, 'text' | 'gear' | 'thread'>, [number, number, number]> = {
-      box: [30, 12, 30], cylinder: [6, 100, 6], sphere: [20, 20, 20], cone: [20, 30, 20], custom: [20, 20, 20]
+      box: [30, 30, 12], cylinder: [6, 6, 100], sphere: [20, 20, 20], cone: [20, 20, 30], custom: [20, 20, 20]
     };
     const obj: ModelObject = {
       id: makeId(), name: names[type], type, position: [0, 0, 0],
@@ -508,7 +525,7 @@ export default function App() {
     const indices = index ? Array.from(index.array as ArrayLike<number>) : null;
     geometry.dispose();
     const obj: ModelObject = {
-      id: makeId(), name, type, position: [0, Math.max(size.y / 2, 0), 0],
+      id: makeId(), name, type, position: [0, 0, Math.max(size.z / 2, 0)],
       rotation: [0, 0, 0], scale: [1, 1, 1], color: type === 'gear' ? '#e7a64b' : '#43b6a8',
       dimensions: [Math.max(size.x, .1), Math.max(size.y, .1), Math.max(size.z, .1)],
       geometryData: { positions, indices }
@@ -544,7 +561,7 @@ export default function App() {
         hole.absarc(0, 0, Math.max(m * 1.5, root * .18), 0, Math.PI * 2, true);
         shape.holes.push(hole);
         const geometry = new THREE.ExtrudeGeometry(shape, { depth: THREE.MathUtils.clamp(gearThickness, 1, 100), bevelEnabled: false, curveSegments: 2 });
-        geometry.rotateX(-Math.PI / 2);
+
         addGeneratedGeometry('Zahnrad ' + teeth + ' Zähne', geometry, 'gear');
       } else if (creatorMode === 'thread') {
         const diameter = THREE.MathUtils.clamp(threadDiameter, 3, 200);
@@ -612,6 +629,7 @@ export default function App() {
         geometry.computeVertexNormals();
         geometry.computeBoundingBox();
         geometry.computeBoundingSphere();
+        geometry.rotateX(Math.PI/2);
         addGeneratedGeometry('Gewinde M' + diameter + ' × ' + pitch, geometry, 'thread');
       }
     } catch (error) {
@@ -628,8 +646,7 @@ export default function App() {
     const id = selected.id;
     setObjects(previous => previous.map(obj => {
       if(obj.id !== id)return obj;
-      const vector = [...obj[key]] as [number,number,number]; vector[axis]=value;
-      return {...obj,[key]:vector};
+      return resizeObject(obj,key,axis,value,uniformScale);
     }));
   };
 
@@ -945,7 +962,7 @@ export default function App() {
         groupId = groups.get(obj.groupId);
       }
       return { ...obj, id: makeId(), groupId, name: clipboard.cut && clipboard.pastes === 0 ? obj.name : `${obj.name} Kopie`,
-        position: [obj.position[0] + offset, obj.position[1], obj.position[2] + offset] as [number, number, number] };
+        position: [obj.position[0] + offset, obj.position[1] + offset, obj.position[2]] as [number, number, number] };
     });
     clipboard.pastes++;
     setObjects(previous => [...previous, ...pasted]);
@@ -1006,7 +1023,7 @@ export default function App() {
   }, [subtract, cutAtPlane, selectedIds, historyVersion, projectName, settingsOpen, creatorMode, busy,holeObjectId,solidObjectId]);
 
   const saveProject = () => {
-    const project = { format: '3dmaker-project', version: 1, name: projectName, objects };
+    const project = { format: '3dmaker-project', version: PROJECT_VERSION, name: projectName, objects };
     downloadFile(`${projectName.replace(/[^a-z0-9-_ ]/gi, '_')}.3dmaker`, JSON.stringify(project, null, 2), 'application/json');
     setStatus('Projekt lokal exportiert.');
   };
@@ -1132,9 +1149,9 @@ export default function App() {
     mesh.updateMatrixWorld(true);
     const bounds = new THREE.Box3().setFromObject(mesh);
     if (bounds.isEmpty()) { setStatus('Für dieses Objekt konnten keine Abmessungen ermittelt werden.'); return; }
-    const nextY = selected.position[1] - bounds.min.y;
-    updateSelected({ position: [selected.position[0], nextY, selected.position[2]] });
-    setStatus('„' + selected.name + '“ auf den Boden gesetzt (Unterkante Y = 0).');
+    const nextZ = selected.position[2] - bounds.min.z;
+    updateSelected({ position: [selected.position[0], selected.position[1], nextZ] });
+    setStatus('„' + selected.name + '“ auf den Boden gesetzt (Unterkante Z = 0).');
   };
 
   const focusView = () => {
@@ -1142,13 +1159,13 @@ export default function App() {
     if (!camera || !controls) return;
     const box = new THREE.Box3();
     for (const mesh of meshMapRef.current.values()) box.expandByObject(mesh);
-    if (box.isEmpty()) { controls.target.set(0, 0, 0); camera.position.set(110, 100, 150); }
+    if (box.isEmpty()) { controls.target.set(0, 0, 0); camera.up.set(0,0,1);camera.position.set(150,110,100); }
     else {
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       controls.target.copy(center);
       const distance = Math.max(size.x, size.y, size.z, 30) * 2.2;
-      camera.position.copy(center).add(new THREE.Vector3(distance, distance * 0.75, distance));
+      camera.position.copy(center).add(new THREE.Vector3(distance, distance, distance * 0.75));
     }
     controls.update();
   };
@@ -1232,7 +1249,7 @@ export default function App() {
         </div>
         <div className="tool-section">
           <div className="section-label">{t("view")}</div>
-          <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>{t("ground")}</strong><small>Unterkante auf Y = 0 ausrichten</small></span></button>
+          <button className="wide-tool" onClick={placeOnGround} disabled={!selected}><span className="tool-glyph">↓</span><span><strong>{t("ground")}</strong><small>Unterkante auf Z = 0 ausrichten</small></span></button>
           <button className="wide-tool" onClick={focusView}><span className="tool-glyph">⌖</span><span><strong>{t("frame")}</strong><small>Modelle im Blick zentrieren</small></span></button>
           <button className="wide-tool" onClick={() => { controlsRef.current?.reset(); }}><span className="tool-glyph">⟳</span><span><strong>{t("reset")}</strong><small>Kamera zurücksetzen</small></span></button>
         </div>
@@ -1246,7 +1263,7 @@ export default function App() {
           <div className="transform-tools"><button className={transformMode === 'translate' ? 'active' : ''} onClick={() => setTransformMode('translate')} title="Verschieben">{t("move")}</button><button className={transformMode === 'rotate' ? 'active' : ''} onClick={() => setTransformMode('rotate')} title="Drehen">{t("rotate")}</button><button className={transformMode === 'scale' ? 'active' : ''} onClick={() => setTransformMode('scale')} title="Skalieren">{t("scale")}</button></div><div className="viewport-help"><span>Griffe ziehen · Umschalt + Klick: Mehrfachauswahl</span><span>Rad: Zoom · Ziehen: Orbit</span></div>
         </div>
         <div className="viewport" ref={hostRef} onDragOver={onDragOver} onDrop={onDrop}>
-          <div className="viewport-badge">XYZ <span>·</span> MM</div>
+          <div className="viewport-badge">XY Boden · Z ↑ <span>·</span> MM</div>
           {selected && !holeObjectId && !solidObjectId && <div className="transform-readout"><strong>{transformMode === 'scale' ? 'SKALIERUNG LIVE' : transformMode === 'rotate' ? 'DREHUNG LIVE' : 'POSITION LIVE'}</strong>{transformMode === 'scale' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.dimensions[i] ?? selected.dimensions[i] * selected.scale[i]).toFixed(2)} mm</b> <em>{(liveTransform?.delta[i] ?? 0) >= 0 ? '+' : ''}{(liveTransform?.delta[i] ?? 0).toFixed(2)} mm</em></span>)}</div> : transformMode === 'rotate' ? <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{(liveTransform?.rotation[i] ?? selected.rotation[i]).toFixed(1)}°</b></span>)}</div> : <div>{['X','Y','Z'].map((axis, i) => <span key={axis}>{axis}: <b>{selected.position[i].toFixed(2)} mm</b></span>)}</div>}</div>}
           {selected && selected.id===holeObjectId && sceneRef.current && cameraRef.current && controlsRef.current && meshMapRef.current.get(selected.id) && <HoleTool onSolidMode={()=>{setHoleObjectId(null);setSolidObjectId(selected.id);}} object={selected} scene={sceneRef.current} camera={cameraRef.current} controls={controlsRef.current} mesh={meshMapRef.current.get(selected.id)!} onClose={()=>setHoleObjectId(null)} onApply={(geometryData,dimensions)=>{
             const id=selected.id;
@@ -1258,7 +1275,8 @@ export default function App() {
             setSolidObjectId(null);setStatus('Markierter Durchgang durch einen vereinigten Verschlusskörper geschlossen. Strg+Z macht die Änderung rückgängig.');
           }} />}
           <div className="drop-hint">STL / OBJ / .3dmaker hier ablegen</div>
-          <div className="axis-badge"><span className="axis-x">X</span><span className="axis-y">Y</span><span className="axis-z">Z</span></div>
+          {selected&&activeField&&!holeObjectId&&!solidObjectId&&sceneRef.current&&meshMapRef.current.get(selected.id)&&<><AxisHighlight scene={sceneRef.current} mesh={meshMapRef.current.get(selected.id)!} field={activeField}/><div className={`axis-focus axis-${['x','y','z'][activeField.axis]}`} role="status" data-axis={['X','Y','Z'][activeField.axis]}>{['X','Y','Z'][activeField.axis]} · {activeField.kind==='position'?'Weltachse · Verschieben':activeField.kind==='rotation'?'Drehachse · Euler XYZ':`Lokale Achse · ${activeField.kind==='dimensions'?'Abmessung':'Skalierung'}${uniformScale?' · proportional':''}`}</div></>}
+          {sceneReady&&cameraRef.current&&controlsRef.current&&<OrientationCompass camera={cameraRef.current} controls={controlsRef.current}/>}
           {objects.length === 0 && <div className="empty-viewport">Erstelle links deinen ersten Körper.</div>}
         </div>
         <div className="statusbar"><span className="status-icon">✓</span><span>{status}</span><span className="status-spacer" /><span>{objects.length} Objekt{objects.length === 1 ? '' : 'e'}</span><span className="status-unit">Einheit: mm</span></div>
@@ -1280,15 +1298,16 @@ export default function App() {
         {selected ? <div className="properties" key={selected.id}>
           <label className="field-label">{t("name")}<input value={selected.name} onChange={e => updateSelected({ name: e.target.value })} /></label>
           <label className="field-label">{t("color")}<div className="color-field"><input type="color" value={selected.color} onChange={e => updateSelected({ color: e.target.value })} /><span>{selected.color.toUpperCase()}</span></div></label>
-          <VectorFields key={selected.id + 'position'} title="POSITION" labels={['X', 'Y', 'Z']} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
-          <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
-          <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['X', 'Y', 'Z']} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
-          <VectorFields minimum={0.01} title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
+          <VectorFields key={selected.id + 'position'} title="POSITION" labels={['X', 'Y', 'Z']} activeAxis={activeField?.kind==='position'?activeField.axis:undefined} onFocusAxis={axis=>setActiveField({axis,kind:'position'})} onBlurAxis={()=>setActiveField(null)} values={selected.position} onChange={(i, v) => updateVector('position', i, v)} />
+          <VectorFields title="DREHUNG °" labels={['X', 'Y', 'Z']} activeAxis={activeField?.kind==='rotation'?activeField.axis:undefined} onFocusAxis={axis=>setActiveField({axis,kind:'rotation'})} onBlurAxis={()=>setActiveField(null)} values={selected.rotation} onChange={(i, v) => updateVector('rotation', i, v)} />
+          <button className={`scale-lock ${uniformScale?'active':''}`} aria-label="Proportional skalieren" aria-pressed={uniformScale} onClick={()=>setUniformScale(v=>!v)} title="Abmessungen und Skalierungsgriffe proportional ändern"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="5" y="10" width="14" height="11" rx="2"/><path d={uniformScale?'M8 10V6a4 4 0 0 1 8 0v4':'M8 10V6a4 4 0 0 1 8 0'}/><path d="M12 14v3"/></svg> {uniformScale?'Proportionen gesperrt':'Proportionen frei'}</button>
+          <VectorFields minimum={0.1} title="ABMESSUNGEN MM · LOKALE ACHSEN" labels={['X', 'Y', 'Z']} activeAxis={activeField?.kind==='dimensions'?activeField.axis:undefined} onFocusAxis={axis=>setActiveField({axis,kind:'dimensions'})} onBlurAxis={()=>setActiveField(null)} values={selected.dimensions} onChange={(i, v) => updateVector('dimensions', i, Math.max(0.1, v))} />
+          <VectorFields minimum={0.01} title="SKALIERUNG ×" labels={['X', 'Y', 'Z']} activeAxis={activeField?.kind==='scale'?activeField.axis:undefined} onFocusAxis={axis=>setActiveField({axis,kind:'scale'})} onBlurAxis={()=>setActiveField(null)} values={selected.scale} onChange={(i, v) => updateVector('scale', i, Math.max(0.01, v))} />
           <div className="actual-dimensions"><span>LOKALE MAẞE INKL. SKALIERUNG</span><strong>{selected.dimensions.map((v, i) => `${(v * selected.scale[i]).toFixed(2)} mm`).join(' × ')}</strong></div>
           <div className="selection-tools"><button disabled={busy || selectedIds.length!==1 || !!holeObjectId || !!solidObjectId} onClick={()=>{setCutMode(false);setHoleObjectId(selected.id);}}>Löcher markieren & schließen</button><button disabled={busy || selectedIds.length!==1 || !!holeObjectId || !!solidObjectId} onClick={()=>{setCutMode(false);setSolidObjectId(selected.id);}}>Armloch / Durchgang schließen</button><button disabled={busy || selectedIds.length !== 1} onClick={repairSelected} title="Doppelte/degenerierte Flächen entfernen und Normalen ausrichten; Löcher werden gemeldet">Mesh reparieren</button><button onClick={()=>exportStl(true)}>Auswahl als STL</button><button onClick={()=>{
             const selectedObjects=objects.filter(o=>selectedIds.includes(o.id)).map(o=>({...o,groupId:undefined}));
-            downloadFile('Auswahl.3dmaker',JSON.stringify({format:'3dmaker-project',version:1,name:'Auswahl',objects:selectedObjects}), 'application/json');
-          }}>Auswahl als Projekt</button></div><div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1], selected.position[2] + 10], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
+            downloadFile('Auswahl.3dmaker',JSON.stringify({format:'3dmaker-project',version:PROJECT_VERSION,name:'Auswahl',objects:selectedObjects}), 'application/json');
+          }}>Auswahl als Projekt</button></div><div className="property-actions"><button className="secondary full-button" onClick={() => setObjects(prev => [...prev, { ...selected, groupId: undefined, id: makeId(), name: `${selected.name} Kopie`, position: [selected.position[0] + 10, selected.position[1] + 10, selected.position[2]], geometryData: selected.geometryData ? { positions: [...selected.geometryData.positions], indices: selected.geometryData.indices ? [...selected.geometryData.indices] : null } : undefined }])}>{t("duplicate")}</button><button className="danger" onClick={() => { setObjects(prev => prev.filter(o => o.id !== selected.id)); setSelectedIds(prev => prev.filter(id => id !== selected.id)); }}>{t("delete")}</button></div>
         </div> : <div className="no-selection"><span>◇</span><strong>{t("noObject")}</strong><p>Wähle ein Objekt in der Szene oder im Explorer, um seine Eigenschaften zu bearbeiten.</p></div>}
         {selectedIds.length === 2 && <div className="cut-info"><strong>Boolean bereit</strong><p>1. {objects.find(o => o.id === selectedIds[0])?.name} minus 2. {objects.find(o => o.id === selectedIds[1])?.name}</p><button className="primary full-button" disabled={busy} onClick={subtract}>Ausschnitt berechnen · H</button></div>}
         <div className="right-footer"><span>3DMAKER</span><span>v{APP_VERSION} · EXPERIMENTELL</span></div>
@@ -1297,7 +1316,7 @@ export default function App() {
   </main>;
 }
 
-function NumericField({ value, onChange, minimum }: { value: number; minimum?: number; onChange: (value: number) => void }) {
+function NumericField({ value, onChange, minimum, onFocus, onBlur, label }: { onFocus?:()=>void;onBlur?:()=>void;label?:string; value: number; minimum?: number; onChange: (value: number) => void }) {
   const [draft, setDraft] = useState(String(Number(value.toFixed(3))));
   useEffect(() => { setDraft(String(Number(value.toFixed(3)))); }, [value]);
   const commit = () => {
@@ -1306,12 +1325,12 @@ function NumericField({ value, onChange, minimum }: { value: number; minimum?: n
     if (Number.isFinite(next)) onChange(next);
     setDraft(String(Number((Number.isFinite(next) ? next : value).toFixed(3))));
   };
-  return <input type="number" min={minimum} step="1" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => {
+  return <input aria-label={label} onFocus={onFocus} type="number" min={minimum} step="any" value={draft} onChange={e => setDraft(e.target.value)} onBlur={()=>{commit();onBlur?.();}} onKeyDown={e => {
     if (e.key === 'Enter') e.currentTarget.blur();
     if (e.key === 'Escape') { setDraft(String(Number(value.toFixed(3)))); e.stopPropagation(); }
   }} />;
 }
 
-function VectorFields({ title, labels, values, onChange, minimum }: { minimum?: number; title: string; labels: string[]; values: number[]; onChange: (axis: number, value: number) => void }) {
-  return <div className="vector-fields"><div className="section-label">{title}</div><div className="vector-row">{labels.map((label, i) => <label key={label}><span>{label}</span><NumericField minimum={minimum} value={values[i]} onChange={v => onChange(i, v)} /></label>)}</div></div>;
+function VectorFields({ title, labels, values, onChange, minimum, activeAxis, onFocusAxis, onBlurAxis }: { minimum?: number; title: string; labels: string[]; values: number[]; onChange: (axis: number, value: number) => void;activeAxis?:number;onFocusAxis?:(axis:number)=>void;onBlurAxis?:()=>void }) {
+  return <div className="vector-fields"><div className="section-label">{title}</div><div className="vector-row">{labels.map((label, i) => <label className={`axis-field axis-${label.toLowerCase()} ${activeAxis===i?'axis-field-active':''}`} key={label}><span>{label}</span><NumericField label={`${title} ${label}`} onFocus={()=>onFocusAxis?.(i)} onBlur={onBlurAxis} minimum={minimum} value={values[i]} onChange={v => onChange(i, v)} /></label>)}</div></div>;
 }

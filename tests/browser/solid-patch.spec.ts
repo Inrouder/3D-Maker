@@ -17,8 +17,8 @@ async function save(page:any){
 }
 async function draw(page:any){
   await page.getByRole('button',{name:'Werkzeug einklappen',exact:true}).click();
-  const rect=await page.locator('canvas').boundingBox(),camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.position.set(110,100,150);camera.lookAt(0,0,0);camera.updateMatrixWorld();
-  const points=Array.from({length:32},(_,i)=>{const a=i*Math.PI*2/32,p=new THREE.Vector3(Math.cos(a)*8*3,Math.sin(a)*8*3,3).project(camera);return [rect.x+(p.x+1)*rect.width/2,rect.y+(1-p.y)*rect.height/2];});
+  const rect=await page.locator('canvas').boundingBox(),camera=new THREE.PerspectiveCamera(45,rect.width/rect.height,.1,10000);camera.up.set(0,0,1);camera.position.set(150,110,100);camera.lookAt(0,0,0);camera.updateMatrixWorld();
+  const points=Array.from({length:32},(_,i)=>{const a=i*Math.PI*2/32,p=new THREE.Vector3(3,Math.cos(a)*8*3,Math.sin(a)*8*3).project(camera);return [rect.x+(p.x+1)*rect.width/2,rect.y+(1-p.y)*rect.height/2];});
   await page.mouse.move(points[0][0],points[0][1]);await page.mouse.down();for(const p of [...points.slice(1),points[0]])await page.mouse.move(p[0],p[1],{steps:3});await page.mouse.up();
   await page.getByRole('button',{name:'Werkzeug ausklappen',exact:true}).click();await expect(page.getByRole('status')).toContainText('Markierung übernommen');
 }

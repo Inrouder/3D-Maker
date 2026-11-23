@@ -3,7 +3,7 @@
 **Ein lokaler 3D-Modellierer für Windows und den Browser.** Entwerfe und bearbeite 3D-Objekte in einer übersichtlichen Arbeitsfläche – ohne Benutzerkonto, Cloudzwang, Werbung oder Slicer.
 
 [![Build](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml/badge.svg)](https://github.com/Inrouder/3D-Maker/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/Version-0.1.14-19b5a5)
+![Version](https://img.shields.io/badge/Version-0.1.15-19b5a5)
 ![Windows](https://img.shields.io/badge/Windows-Portable-2767bb)
 ![Status](https://img.shields.io/badge/Status-Experimentell-ef9d38)
 
@@ -35,6 +35,8 @@ Der Link zeigt immer auf das neueste vollständig gebaute stabile Release, ohne 
 2. **Bearbeiten:** Mit den Griffen verschieben, drehen oder skalieren; numerische Maße in Millimetern festlegen.
 3. **Kombinieren:** Ein Werkstück und einen Schneidkörper auswählen, dann mit **H** den Ausschnitt durchführen.
 4. **Speichern:** Projekt lokal sichern oder Modelle als STL exportieren.
+
+**Orientierung:** X/Y bilden die Bodenebene, Z ist die Höhe. Das Schloss in den Eigenschaften koppelt Abmessungen und Skalierung proportional. Beim Auswählen eines Achsenfeldes werden die zugehörigen Seiten am Objekt hervorgehoben. Alte Projekte werden beim Öffnen umgerechnet; neue Projekte benötigen Version 0.1.15 oder neuer.
 
 ## Design und Programm-Icon
 
@@ -104,6 +106,10 @@ Jedes Release enthält die versionierte EXE, den festen Namen `3D-Maker-Portable
 React 19 · TypeScript · Three.js · Vite · Electron · electron-builder · GitHub Actions.
 
 3D-Maker speichert Projekte lokal und benötigt für die eigentliche Modellierung keine Netzwerkverbindung. Eine Verbindung zu GitHub wird ausschließlich für optionale Updateprüfungen oder das manuelle Öffnen des Repositorys verwendet.
+
+## Änderungen 0.1.15
+
+[Z-up-Achsen, proportionales Skalieren mit Schloss und Hervorhebung aktiver Achsen](docs/CHANGES_0.1.15.md)
 
 ## Änderungen 0.1.14
 
